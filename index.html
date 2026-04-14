@@ -688,6 +688,24 @@
           }
         };
 
+        useEffect(() => {
+          const dayShifts = calendarShifts
+            .filter((shift) => shift.date === calendarDate)
+            .sort((a, b) => a.startTime.localeCompare(b.startTime));
+
+          if (dayShifts.length === 0) {
+            if (editingCalendarShiftId !== null) setEditingCalendarShiftId(null);
+            setCalendarStartTime("08:00");
+            setCalendarEndTime("14:00");
+            return;
+          }
+
+          const activeShift = dayShifts.find((shift) => shift.id === editingCalendarShiftId) || dayShifts[0];
+          if (editingCalendarShiftId !== activeShift.id) setEditingCalendarShiftId(activeShift.id);
+          if (calendarStartTime !== activeShift.startTime) setCalendarStartTime(activeShift.startTime);
+          if (calendarEndTime !== activeShift.endTime) setCalendarEndTime(activeShift.endTime);
+        }, [calendarDate, calendarShifts]);
+
         const buildMonthlyMarkdown = () => {
           const monthLabel = `${MONTH_OPTIONS[Number(calendarMonth.slice(5, 7)) - 1]} ${calendarMonth.slice(0, 4)}`;
           const summaryRows = [
@@ -758,7 +776,7 @@
             session
               ? calculateBreakdown(
                   session.startTime,
-                  currentTime.getTime(),
+                  Math.max(currentTime.getTime(), session.startTime),
                   weeklyStats.totalHours,
                 )
               : null,
@@ -895,9 +913,20 @@
           currentTime,
           weeklyStats.totalHours + (currentBreakdown?.paidElapsed || 0) / 3600000,
         );
+        const liveBaseRateByCode = {
+          ORD: PAYSLIP_REGULAR_HOURLY_RATE,
+          S15: PAYSLIP_S15_RATE,
+          S25: PAYSLIP_S25_RATE,
+          S50: PAYSLIP_S50_RATE,
+        };
+        const liveNightExtraRate = isNightShift(currentTime)
+          ? isSundayOrHoliday(currentTime)
+            ? PAYSLIP_NTD_RATE
+            : PAYSLIP_NTT_RATE
+          : 0;
         const liveRate =
-          BASE_RATE * getPayCode(livePayCode).multiplier +
-          (isNightShift(currentTime) && livePayCode !== "S50" ? BASE_RATE * currentNightBonusFraction : 0);
+          (liveBaseRateByCode[livePayCode] || PAYSLIP_REGULAR_HOURLY_RATE) +
+          (isNightShift(currentTime) && livePayCode !== "S50" ? liveNightExtraRate : 0);
 
         useEffect(() => {
           if (!session?.autoEndTime) {
@@ -1503,13 +1532,19 @@
                 </section>
               ) : (
                 <section className="flex flex-col items-center">
-                  <div className="text-center mb-12 relative">
-                    <div className="text-[4.5rem] sm:text-[6rem] md:text-[9.5rem] font-black tabular-nums leading-none tracking-tight mb-6 break-words">
+                  <div className="text-center mb-10 w-full">
+                    <p className="text-[10px] font-black uppercase tracking-[0.3em] text-zinc-500 mb-4">
+                      Turno in corso
+                    </p>
+                    <div className="text-[4.5rem] sm:text-[6rem] md:text-[8rem] font-black tabular-nums leading-none tracking-tight mb-4 break-words">
                       EUR {currentBreakdown.total.toLocaleString("it-IT", {
                         minimumFractionDigits: 2,
                         maximumFractionDigits: 2,
                       })}
                     </div>
+                    <p className="text-sm text-zinc-500 mb-6">
+                      {activeAutoEndLabel ? `Salvataggio automatico alle ${activeAutoEndLabel}` : "Salvataggio manuale"}
+                    </p>
                     <div className="flex flex-wrap justify-center gap-3">
                       {Object.entries(currentBreakdown.payCodeTotals)
                         .filter(([, hours]) => hours > 0)
@@ -1544,8 +1579,8 @@
                     </div>
                   </div>
 
-                  <div className="grid grid-cols-1 md:grid-cols-5 gap-6 w-full mb-16">
-                    <div className="bg-zinc-900/70 border border-white/10 p-6 rounded text-center">
+                  <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-4 gap-4 w-full mb-10">
+                    <div className="bg-zinc-900/70 border border-white/10 p-5 rounded text-center">
                       <p className="text-[10px] font-bold text-zinc-500 uppercase mb-4 tracking-widest">
                         Ora inizio
                       </p>
@@ -1576,7 +1611,7 @@
                         </button>
                       </div>
                     </div>
-                    <div className="bg-zinc-900/70 border border-white/10 p-6 rounded text-center">
+                    <div className="bg-zinc-900/70 border border-white/10 p-5 rounded text-center">
                       <p className="text-[10px] font-bold text-zinc-500 uppercase mb-4 tracking-widest">
                         Trascorso
                       </p>
@@ -1591,24 +1626,9 @@
                           .padStart(2, "0")}
                       </span>
                     </div>
-                    <div className="bg-zinc-900/70 border border-white/10 p-6 rounded text-center">
+                    <div className="bg-zinc-900/70 border border-white/10 p-5 rounded text-center">
                       <p className="text-[10px] font-bold text-zinc-500 uppercase mb-4 tracking-widest">
-                        Tempo pagato
-                      </p>
-                      <span className="text-2xl font-bold tabular-nums">
-                        {Math.floor(currentBreakdown.paidElapsed / 3600000).toString().padStart(2, "0")}:
-                        {Math.floor((currentBreakdown.paidElapsed % 3600000) / 60000)
-                          .toString()
-                          .padStart(2, "0")}
-                        :
-                        {Math.floor((currentBreakdown.paidElapsed % 60000) / 1000)
-                          .toString()
-                          .padStart(2, "0")}
-                      </span>
-                    </div>
-                    <div className="bg-zinc-900/70 border border-white/10 p-6 rounded text-center">
-                      <p className="text-[10px] font-bold text-zinc-500 uppercase mb-4 tracking-widest">
-                        Tariffa attuale
+                        Tariffa stimata
                       </p>
                       <span
                         className={`text-2xl font-bold ${
@@ -1617,8 +1637,13 @@
                       >
                         EUR {liveRate.toFixed(2)}
                       </span>
+                      <p className="text-[10px] font-bold uppercase tracking-widest text-zinc-500 mt-3">
+                        {isNightShift(currentTime)
+                          ? "Calcolo busta con maggiorazione notte"
+                          : "Calcolo busta oraria stimata"}
+                      </p>
                     </div>
-                    <div className="bg-zinc-900/70 border border-white/10 p-6 rounded text-center">
+                    <div className="bg-zinc-900/70 border border-white/10 p-5 rounded text-center">
                       <p className="text-[10px] font-bold text-zinc-500 uppercase mb-4 tracking-widest">
                         Fine automatica
                       </p>
@@ -1642,7 +1667,7 @@
                     </div>
                   </div>
 
-                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 w-full max-w-xl">
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 w-full max-w-2xl">
                     <button
                       onClick={endSession}
                       className="w-full bg-white text-black py-4 rounded text-sm font-extrabold hover:bg-yellow-400 transition-all active:scale-[0.99] uppercase tracking-widest"
