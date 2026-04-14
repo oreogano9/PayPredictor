@@ -82,6 +82,7 @@
       const PAYSLIP_L207_INDEMNITY = 53.15;
       const PAYSLIP_ROUNDING = 0.44;
       const STORAGE_KEY = `earnings-tracker:${appId}:main`;
+      const SETTINGS_STORAGE_KEY = `earnings-tracker:${appId}:settings`;
       const PAY_CODES = {
         ORD: { label: "Ore ordinarie", multiplier: 1 },
         S15: { label: "Ore supplementari 15%", multiplier: SUPPLEMENTAL_15_MULTIPLIER },
@@ -199,6 +200,81 @@
         window.dispatchEvent(new Event("earnings-tracker:storage"));
       }
 
+      function readLocalSettings() {
+        const fallback = { googleCalendarIcsUrl: "", paysForParking: true };
+
+        try {
+          const saved = JSON.parse(localStorage.getItem(SETTINGS_STORAGE_KEY));
+          return saved ? { ...fallback, ...saved } : fallback;
+        } catch {
+          return fallback;
+        }
+      }
+
+      function writeLocalSettings(nextSettings) {
+        localStorage.setItem(SETTINGS_STORAGE_KEY, JSON.stringify(nextSettings));
+      }
+
+      function unfoldIcsLines(text) {
+        return text.replace(/\r?\n[ \t]/g, "");
+      }
+
+      function parseIcsDateValue(value) {
+        if (!value) return null;
+        if (/^\d{8}T\d{6}Z$/.test(value)) {
+          const year = Number(value.slice(0, 4));
+          const month = Number(value.slice(4, 6)) - 1;
+          const day = Number(value.slice(6, 8));
+          const hour = Number(value.slice(9, 11));
+          const minute = Number(value.slice(11, 13));
+          const second = Number(value.slice(13, 15));
+          return new Date(Date.UTC(year, month, day, hour, minute, second));
+        }
+        if (/^\d{8}T\d{6}$/.test(value)) {
+          const year = Number(value.slice(0, 4));
+          const month = Number(value.slice(4, 6)) - 1;
+          const day = Number(value.slice(6, 8));
+          const hour = Number(value.slice(9, 11));
+          const minute = Number(value.slice(11, 13));
+          const second = Number(value.slice(13, 15));
+          return new Date(year, month, day, hour, minute, second);
+        }
+        return null;
+      }
+
+      function parsePublicIcsToShifts(icsText) {
+        const unfolded = unfoldIcsLines(icsText);
+        const events = unfolded.split("BEGIN:VEVENT").slice(1);
+        const shifts = [];
+
+        events.forEach((eventText, index) => {
+          const dtStartLine = eventText.match(/^DTSTART(?:;[^:\n]+)?:([^\n\r]+)/m);
+          const dtEndLine = eventText.match(/^DTEND(?:;[^:\n]+)?:([^\n\r]+)/m);
+          const isAllDay = /DTSTART;VALUE=DATE/i.test(eventText) || /DTEND;VALUE=DATE/i.test(eventText);
+
+          if (!dtStartLine || !dtEndLine || isAllDay) {
+            return;
+          }
+
+          const start = parseIcsDateValue(dtStartLine[1].trim());
+          const end = parseIcsDateValue(dtEndLine[1].trim());
+
+          if (!start || !end || end <= start) {
+            return;
+          }
+
+          shifts.push({
+            id: `ical-${formatDateInput(start)}-${formatTimeInput(start)}-${index}`,
+            date: formatDateInput(start),
+            startTime: formatTimeInput(start),
+            endTime: formatTimeInput(end),
+            source: "ical",
+          });
+        });
+
+        return shifts;
+      }
+
       function roundToHalfHour(date) {
         const rounded = new Date(date);
         rounded.setMinutes(Math.round(rounded.getMinutes() / 30) * 30);
@@ -225,6 +301,45 @@
         const [year, month, day] = dateValue.split("-").map(Number);
         const [hours, minutes] = timeValue.split(":").map(Number);
         return new Date(year, month - 1, day, hours, minutes, 0, 0);
+      }
+
+      function createEmptyBreakdown() {
+        return {
+          total: 0,
+          base: 0,
+          payCodeTotals: { ORD: 0, S15: 0, S25: 0, S50: 0 },
+          nightExtra: 0,
+          nightWeekdayExtra: 0,
+          nightSundayHolidayExtra: 0,
+          nightWeekdayHours: 0,
+          nightSundayHolidayHours: 0,
+          mealVoucher: 0,
+          elapsed: 0,
+          paidElapsed: 0,
+          unpaidBreakMs: 0,
+        };
+      }
+
+      function mergeBreakdowns(left, right) {
+        return {
+          total: left.total + right.total,
+          base: left.base + right.base,
+          payCodeTotals: {
+            ORD: left.payCodeTotals.ORD + right.payCodeTotals.ORD,
+            S15: left.payCodeTotals.S15 + right.payCodeTotals.S15,
+            S25: left.payCodeTotals.S25 + right.payCodeTotals.S25,
+            S50: left.payCodeTotals.S50 + right.payCodeTotals.S50,
+          },
+          nightExtra: left.nightExtra + right.nightExtra,
+          nightWeekdayExtra: left.nightWeekdayExtra + right.nightWeekdayExtra,
+          nightSundayHolidayExtra: left.nightSundayHolidayExtra + right.nightSundayHolidayExtra,
+          nightWeekdayHours: left.nightWeekdayHours + right.nightWeekdayHours,
+          nightSundayHolidayHours: left.nightSundayHolidayHours + right.nightSundayHolidayHours,
+          mealVoucher: left.mealVoucher + right.mealVoucher,
+          elapsed: left.elapsed + right.elapsed,
+          paidElapsed: left.paidElapsed + right.paidElapsed,
+          unpaidBreakMs: left.unpaidBreakMs + right.unpaidBreakMs,
+        };
       }
 
       const TIME_OPTIONS = Array.from({ length: 48 }, (_, index) => {
@@ -256,6 +371,8 @@
       function App() {
         const [user, setUser] = useState(null);
         const [session, setSession] = useState(null);
+        const [autoTrackSession, setAutoTrackSession] = useState(null);
+        const [dismissedAutoTrackDate, setDismissedAutoTrackDate] = useState("");
         const [weeklyStats, setWeeklyStats] = useState({ totalHours: 0, totalEarned: 0 });
         const [mode, setMode] = useState("track");
         const [selectedStartTime, setSelectedStartTime] = useState(() => formatTimeInput(roundToHalfHour(new Date())));
@@ -265,12 +382,22 @@
           formatTimeInput(new Date(roundToHalfHour(new Date()).getTime() + 6 * 3600000)),
         );
         const [calendarShifts, setCalendarShifts] = useState([]);
+        const [importedCalendarShifts, setImportedCalendarShifts] = useState([]);
         const [calendarMonth, setCalendarMonth] = useState(() => formatMonthInput(new Date()));
         const [calendarDate, setCalendarDate] = useState(() => formatDateInput(new Date()));
         const [calendarStartTime, setCalendarStartTime] = useState("08:00");
         const [calendarEndTime, setCalendarEndTime] = useState("14:00");
+        const [calendarView, setCalendarView] = useState("plan");
+        const [calendarGraphMode, setCalendarGraphMode] = useState("both");
+        const [calendarPayLineMode, setCalendarPayLineMode] = useState("daily");
+        const [hoveredGraphPointKey, setHoveredGraphPointKey] = useState(null);
         const [editingCalendarShiftId, setEditingCalendarShiftId] = useState(null);
         const [copyMonthStatus, setCopyMonthStatus] = useState("");
+        const [settingsOpen, setSettingsOpen] = useState(false);
+        const [googleCalendarIcsUrl, setGoogleCalendarIcsUrl] = useState(() => readLocalSettings().googleCalendarIcsUrl || "");
+        const [paysForParking, setPaysForParking] = useState(() => readLocalSettings().paysForParking !== false);
+        const [settingsStatus, setSettingsStatus] = useState("");
+        const [icalSyncStatus, setIcalSyncStatus] = useState("");
         const [currentTime, setCurrentTime] = useState(new Date());
         const autoEndingRef = useRef(false);
         const [loading, setLoading] = useState(true);
@@ -351,6 +478,148 @@
           const timer = setInterval(() => setCurrentTime(new Date()), 100);
           return () => clearInterval(timer);
         }, []);
+
+        useEffect(() => {
+          if (session) {
+            setAutoTrackSession(null);
+            return;
+          }
+
+          const today = formatDateInput(currentTime);
+          if (dismissedAutoTrackDate === today) {
+            setAutoTrackSession(null);
+            return;
+          }
+
+          const todayShifts = allCalendarShifts
+            .filter((shift) => shift.date === today)
+            .sort((a, b) => a.startTime.localeCompare(b.startTime));
+
+          if (todayShifts.length === 0) {
+            setAutoTrackSession(null);
+            return;
+          }
+
+          const nowMs = currentTime.getTime();
+          const ranges = todayShifts.map((shift) => ({
+            shift,
+            ...getShiftRange(shift.date, shift.startTime, shift.endTime),
+          }));
+          const ongoing = ranges.find(({ start, end }) => start.getTime() <= nowMs && nowMs < end.getTime());
+
+          if (ongoing) {
+            setAutoTrackSession((prev) =>
+              prev &&
+              prev.prefillDate === today &&
+              prev.startTime === ongoing.start.getTime() &&
+              prev.autoPrefilled
+                ? prev
+                : {
+                    startTime: ongoing.start.getTime(),
+                    autoEndTime: null,
+                    prefillDate: today,
+                    autoPrefilled: true,
+                  },
+            );
+            return;
+          }
+
+          const completed = ranges.filter(({ end }) => end.getTime() <= nowMs);
+          if (completed.length === 0) {
+            setAutoTrackSession(null);
+            return;
+          }
+
+          const latestCompleted = completed[completed.length - 1];
+          setAutoTrackSession((prev) =>
+            prev &&
+            prev.prefillDate === today &&
+            prev.startTime === latestCompleted.end.getTime() &&
+            prev.autoPrefilled
+              ? prev
+              : {
+                  startTime: latestCompleted.end.getTime(),
+                  autoEndTime: null,
+                  prefillDate: today,
+                  autoPrefilled: true,
+                },
+          );
+        }, [allCalendarShifts, currentTime, dismissedAutoTrackDate, session]);
+
+        const activeTrackSession = session || autoTrackSession;
+
+        useEffect(() => {
+          let cancelled = false;
+
+          const syncIcal = async () => {
+            const nextUrl = googleCalendarIcsUrl.trim();
+            if (!nextUrl) {
+              setImportedCalendarShifts([]);
+              setIcalSyncStatus("");
+              return;
+            }
+
+            setIcalSyncStatus("Sincronizzazione calendario in corso...");
+            try {
+              const response = await fetch(nextUrl);
+              if (!response.ok) {
+                throw new Error(`HTTP ${response.status}`);
+              }
+              const text = await response.text();
+              const shifts = parsePublicIcsToShifts(text);
+              if (cancelled) return;
+              setImportedCalendarShifts(shifts);
+              setIcalSyncStatus(`Calendario importato: ${shifts.length} turni letti`);
+            } catch (error) {
+              console.error("Errore sync iCal", error);
+              if (cancelled) return;
+              setImportedCalendarShifts([]);
+              setIcalSyncStatus("Impossibile leggere l'iCal da browser. Probabile limite CORS.");
+            }
+          };
+
+          syncIcal();
+          return () => {
+            cancelled = true;
+          };
+        }, [googleCalendarIcsUrl]);
+
+        const allCalendarShifts = useMemo(
+          () =>
+            [...calendarShifts, ...importedCalendarShifts].sort((a, b) =>
+              `${a.date} ${a.startTime}`.localeCompare(`${b.date} ${b.startTime}`),
+            ),
+          [calendarShifts, importedCalendarShifts],
+        );
+
+        const calculateStoredDayPrefill = React.useCallback(
+          (dateValue, cutoffMs, baseWeeklyHours = 0) => {
+            const dayShifts = allCalendarShifts
+              .filter((shift) => shift.date === dateValue)
+              .sort((a, b) => a.startTime.localeCompare(b.startTime));
+
+            let aggregate = createEmptyBreakdown();
+            let paidHoursBefore = 0;
+
+            for (const shift of dayShifts) {
+              const { start, end } = getShiftRange(shift.date, shift.startTime, shift.endTime);
+              if (end.getTime() > cutoffMs) {
+                continue;
+              }
+              const breakdown = calculateBreakdown(
+                start.getTime(),
+                end.getTime(),
+                baseWeeklyHours + paidHoursBefore,
+                baseWeeklyHours + paidHoursBefore,
+              );
+              aggregate = mergeBreakdowns(aggregate, breakdown);
+              paidHoursBefore += breakdown.paidElapsed / 3600000;
+            }
+
+            return { aggregate, paidHoursBefore };
+          },
+          [allCalendarShifts],
+        );
 
         const saveState = async (nextState) => {
           if (!user) return;
@@ -553,18 +822,26 @@
         };
 
         const endSession = async (forcedEndMs = null) => {
-          if (!user || !session) return;
+          if (!user || !activeTrackSession) return;
           const endMs = forcedEndMs ?? currentTime.getTime();
+          const prefill = activeTrackSession.prefillDate
+            ? calculateStoredDayPrefill(activeTrackSession.prefillDate, activeTrackSession.startTime, weeklyStats.totalHours)
+            : { aggregate: createEmptyBreakdown(), paidHoursBefore: 0 };
           const breakdown = calculateBreakdown(
-            session.startTime,
+            activeTrackSession.startTime,
             endMs,
-            weeklyStats.totalHours,
+            weeklyStats.totalHours + prefill.paidHoursBefore,
+            weeklyStats.totalHours + prefill.paidHoursBefore,
           );
           const updatedStats = {
             totalHours: weeklyStats.totalHours + breakdown.paidElapsed / 3600000,
             totalEarned: weeklyStats.totalEarned + breakdown.total,
           };
 
+          setAutoTrackSession(null);
+          if (activeTrackSession.autoPrefilled) {
+            setDismissedAutoTrackDate(formatDateInput(currentTime));
+          }
           await saveState({
             session: null,
             weeklyStats: updatedStats,
@@ -572,34 +849,57 @@
         };
 
         const cancelSession = async () => {
-          if (!user || !session) return;
-          await saveState({
-            session: null,
-            weeklyStats,
-          });
+          if (!user || !activeTrackSession) return;
+          if (session) {
+            await saveState({
+              session: null,
+              weeklyStats,
+            });
+          }
+          setAutoTrackSession(null);
+          if (activeTrackSession.autoPrefilled) {
+            setDismissedAutoTrackDate(formatDateInput(currentTime));
+          }
         };
 
         const adjustStart = async (mins) => {
-          if (!user || !session) return;
-          const newStart = session.startTime + mins * 60000;
-          await saveState({
-            session: {
-              ...session,
-              startTime: newStart,
-              autoEndTime: session.autoEndTime
-                ? getSessionAutoEnd(newStart, formatTimeInput(new Date(session.autoEndTime)))
-                : null,
-            },
+          if (!user || !activeTrackSession) return;
+          const newStart = activeTrackSession.startTime + mins * 60000;
+          if (session) {
+            await saveState({
+              session: {
+                ...session,
+                startTime: newStart,
+                autoEndTime: session.autoEndTime
+                  ? getSessionAutoEnd(newStart, formatTimeInput(new Date(session.autoEndTime)))
+                  : null,
+              },
+            });
+            return;
+          }
+          setAutoTrackSession({
+            ...activeTrackSession,
+            startTime: newStart,
+            autoEndTime: activeTrackSession.autoEndTime
+              ? getSessionAutoEnd(newStart, formatTimeInput(new Date(activeTrackSession.autoEndTime)))
+              : null,
           });
         };
 
         const updateSessionAutoEnd = async (timeValue) => {
-          if (!user || !session) return;
-          await saveState({
-            session: {
-              ...session,
-              autoEndTime: getSessionAutoEnd(session.startTime, timeValue),
-            },
+          if (!user || !activeTrackSession) return;
+          if (session) {
+            await saveState({
+              session: {
+                ...session,
+                autoEndTime: getSessionAutoEnd(session.startTime, timeValue),
+              },
+            });
+            return;
+          }
+          setAutoTrackSession({
+            ...activeTrackSession,
+            autoEndTime: getSessionAutoEnd(activeTrackSession.startTime, timeValue),
           });
         };
 
@@ -650,6 +950,23 @@
           await saveState({ calendarShifts: nextShifts });
         };
 
+        const saveSettings = () => {
+          writeLocalSettings({
+            googleCalendarIcsUrl: googleCalendarIcsUrl.trim(),
+            paysForParking,
+          });
+          setSettingsStatus("Impostazioni salvate in questo browser");
+        };
+
+        const clearGoogleCalendarIcsUrl = () => {
+          setGoogleCalendarIcsUrl("");
+          writeLocalSettings({
+            googleCalendarIcsUrl: "",
+            paysForParking,
+          });
+          setSettingsStatus("URL iCal rimosso da questo browser");
+        };
+
         const loadSeededMonth = async (monthKey) => {
           const seed = SEEDED_MONTHS[monthKey];
           if (!seed) return;
@@ -675,21 +992,22 @@
         };
 
         const selectCalendarDay = (dateValue) => {
-          const dayShifts = calendarShifts
+          const dayShifts = allCalendarShifts
             .filter((shift) => shift.date === dateValue)
             .sort((a, b) => a.startTime.localeCompare(b.startTime));
+          const editableShift = dayShifts.find((shift) => shift.source !== "ical");
 
           setCalendarDate(dateValue);
           setCalendarMonth(dateValue.slice(0, 7));
-          if (dayShifts.length > 0) {
-            editCalendarShift(dayShifts[0]);
+          if (editableShift) {
+            editCalendarShift(editableShift);
           } else {
             setEditingCalendarShiftId(null);
           }
         };
 
         useEffect(() => {
-          const dayShifts = calendarShifts
+          const dayShifts = allCalendarShifts
             .filter((shift) => shift.date === calendarDate)
             .sort((a, b) => a.startTime.localeCompare(b.startTime));
 
@@ -701,10 +1019,11 @@
           }
 
           const activeShift = dayShifts.find((shift) => shift.id === editingCalendarShiftId) || dayShifts[0];
-          if (editingCalendarShiftId !== activeShift.id) setEditingCalendarShiftId(activeShift.id);
+          const nextEditingId = activeShift.source === "ical" ? null : activeShift.id;
+          if (editingCalendarShiftId !== nextEditingId) setEditingCalendarShiftId(nextEditingId);
           if (calendarStartTime !== activeShift.startTime) setCalendarStartTime(activeShift.startTime);
           if (calendarEndTime !== activeShift.endTime) setCalendarEndTime(activeShift.endTime);
-        }, [calendarDate, calendarShifts]);
+        }, [allCalendarShifts, calendarDate]);
 
         const buildMonthlyMarkdown = () => {
           const monthLabel = `${MONTH_OPTIONS[Number(calendarMonth.slice(5, 7)) - 1]} ${calendarMonth.slice(0, 4)}`;
@@ -733,14 +1052,11 @@
             ["Payroll credits", `+${formatEuro(monthlyPrediction.payslipNetEstimate.totalCredits)}`],
           ];
 
-          const shiftsTable = monthlyShifts.length
+          const shiftsTable = monthlyShiftBreakdowns.length
             ? [
                 "| Data | Orario | Nota | Importo |",
                 "| --- | --- | --- | ---: |",
-                ...monthlyShifts.map((shift) => {
-                  const { start, end } = getShiftRange(shift.date, shift.startTime, shift.endTime);
-                  const shiftBreakdown = calculateBreakdown(start.getTime(), end.getTime(), 0);
-                  const totalWithVoucher = shiftBreakdown.total + shiftBreakdown.mealVoucher;
+                ...monthlyShiftBreakdowns.map(({ shift, totalWithVoucher }) => {
                   return `| ${new Date(`${shift.date}T00:00:00`).toLocaleDateString("it-IT")} | ${shift.startTime}-${shift.endTime} | ${shift.note || "—"} | ${formatEuro(totalWithVoucher)} |`;
                 }),
               ].join("\n")
@@ -771,34 +1087,39 @@
           }
         };
 
-        const currentBreakdown = useMemo(
-          () =>
-            session
-              ? calculateBreakdown(
-                  session.startTime,
-                  Math.max(currentTime.getTime(), session.startTime),
-                  weeklyStats.totalHours,
-                )
-              : null,
-          [currentTime, session, weeklyStats.totalHours],
-        );
+        const currentBreakdown = useMemo(() => {
+          if (!activeTrackSession) return null;
+
+          const prefillDate = activeTrackSession.prefillDate;
+          const prefill = prefillDate
+            ? calculateStoredDayPrefill(prefillDate, activeTrackSession.startTime, weeklyStats.totalHours)
+            : { aggregate: createEmptyBreakdown(), paidHoursBefore: 0 };
+          const liveBreakdown = calculateBreakdown(
+            activeTrackSession.startTime,
+            Math.max(currentTime.getTime(), activeTrackSession.startTime),
+            weeklyStats.totalHours + prefill.paidHoursBefore,
+            weeklyStats.totalHours + prefill.paidHoursBefore,
+          );
+
+          return mergeBreakdowns(prefill.aggregate, liveBreakdown);
+        }, [activeTrackSession, calculateStoredDayPrefill, currentTime, weeklyStats.totalHours]);
         const activeAutoEndLabel = useMemo(() => {
-          if (!session?.autoEndTime) return "";
-          return new Date(session.autoEndTime).toLocaleTimeString("it-IT", {
+          if (!activeTrackSession?.autoEndTime) return "";
+          return new Date(activeTrackSession.autoEndTime).toLocaleTimeString("it-IT", {
             hour: "2-digit",
             minute: "2-digit",
           });
-        }, [session]);
+        }, [activeTrackSession]);
         const predictionBreakdown = useMemo(() => {
           const { start, end } = getShiftRange(predictionDate, predictionStartTime, predictionEndTime);
           return calculateBreakdown(start.getTime(), end.getTime(), weeklyStats.totalHours);
         }, [predictionDate, predictionEndTime, predictionStartTime, weeklyStats.totalHours]);
         const monthlyShifts = useMemo(
           () =>
-            [...calendarShifts]
+            [...allCalendarShifts]
               .filter((shift) => shift.date.startsWith(calendarMonth))
               .sort((a, b) => `${a.date} ${a.startTime}`.localeCompare(`${b.date} ${b.startTime}`)),
-          [calendarMonth, calendarShifts],
+          [allCalendarShifts, calendarMonth],
         );
         const calendarDays = useMemo(() => {
           const [year, month] = calendarMonth.split("-").map(Number);
@@ -811,7 +1132,7 @@
             const date = new Date(gridStart);
             date.setDate(gridStart.getDate() + index);
             const dateValue = formatDateInput(date);
-            const shifts = calendarShifts
+            const shifts = allCalendarShifts
               .filter((shift) => shift.date === dateValue)
               .sort((a, b) => a.startTime.localeCompare(b.startTime));
             const summary = shifts.reduce(
@@ -820,9 +1141,14 @@
                 const breakdown = calculateBreakdown(start.getTime(), end.getTime(), 0);
                 acc.total += breakdown.total + breakdown.mealVoucher;
                 acc.displayHours += breakdown.elapsed / 3600000;
+                acc.hasNightShift =
+                  acc.hasNightShift ||
+                  breakdown.nightWeekdayHours > 0 ||
+                  breakdown.nightSundayHolidayHours > 0 ||
+                  breakdown.payCodeTotals.S50 > 0;
                 return acc;
               },
-              { total: 0, displayHours: 0 },
+              { total: 0, displayHours: 0, hasNightShift: false },
             );
 
             return {
@@ -832,9 +1158,10 @@
               shifts,
               total: summary.total,
               displayHours: summary.displayHours,
+              hasNightShift: summary.hasNightShift,
             };
           });
-        }, [calendarMonth, calendarShifts]);
+        }, [allCalendarShifts, calendarMonth]);
         const monthlyPrediction = useMemo(() => {
           const weeklyHoursByKey = {};
           const payCodeTotals = { ORD: 0, S15: 0, S25: 0, S50: 0 };
@@ -877,7 +1204,7 @@
           }
 
           const earningsTotal = total;
-          const parkingDeduction = monthlyShifts.length > 0 ? MONTHLY_PARKING_DEDUCTION : 0;
+          const parkingDeduction = monthlyShifts.length > 0 && paysForParking ? MONTHLY_PARKING_DEDUCTION : 0;
           const incomeAfterParking = Math.max(0, earningsTotal - parkingDeduction);
           const payslipNetEstimate = calculatePayslipNetEstimate({
             payCodeTotals,
@@ -903,9 +1230,160 @@
             unpaidBreakMs,
             payCodeTotals,
           };
+        }, [monthlyShifts, paysForParking]);
+        const monthlyShiftBreakdowns = useMemo(() => {
+          const weeklyHoursByKey = {};
+          let monthlyPaidHoursBefore = 0;
+
+          return monthlyShifts.map((shift) => {
+            const weekKey = getWeekKey(shift.date);
+            const { start, end } = getShiftRange(shift.date, shift.startTime, shift.endTime);
+            const breakdown = calculateBreakdown(
+              start.getTime(),
+              end.getTime(),
+              monthlyPaidHoursBefore,
+              weeklyHoursByKey[weekKey] || 0,
+              MONTHLY_ORDINARY_HOURS,
+            );
+
+            monthlyPaidHoursBefore += breakdown.paidElapsed / 3600000;
+            weeklyHoursByKey[weekKey] = (weeklyHoursByKey[weekKey] || 0) + breakdown.paidElapsed / 3600000;
+
+            return {
+              shift,
+              breakdown,
+              totalWithVoucher: breakdown.total + breakdown.mealVoucher,
+            };
+          });
         }, [monthlyShifts]);
+        const monthlyGraphData = useMemo(() => {
+          const breakdownsByDate = monthlyShiftBreakdowns.reduce((acc, entry) => {
+            if (!acc[entry.shift.date]) {
+              acc[entry.shift.date] = [];
+            }
+            acc[entry.shift.date].push(entry);
+            return acc;
+          }, {});
+          let runningPay = 0;
+          const points = calendarDays
+            .filter((day) => day.inMonth && day.shifts.length > 0)
+            .map((day) => {
+              const dayBreakdowns = breakdownsByDate[day.dateValue] || [];
+              const windowStart = day.shifts[0]?.startTime || null;
+              const windowEnd = day.shifts[day.shifts.length - 1]?.endTime || null;
+              const nightHours = dayBreakdowns.reduce(
+                (sum, entry) => sum + entry.breakdown.nightWeekdayHours + entry.breakdown.nightSundayHolidayHours,
+                0,
+              );
+              const mealVoucher = dayBreakdowns.reduce((sum, entry) => sum + entry.breakdown.mealVoucher, 0);
+              const unpaidBreakMinutes = dayBreakdowns.reduce((sum, entry) => sum + entry.breakdown.unpaidBreakMs / 60000, 0);
+              const payCodeTotals = dayBreakdowns.reduce(
+                (acc, entry) => {
+                  for (const [code, hours] of Object.entries(entry.breakdown.payCodeTotals)) {
+                    acc[code] = (acc[code] || 0) + hours;
+                  }
+                  return acc;
+                },
+                {},
+              );
+              runningPay += day.total;
+              return {
+                key: day.dateValue,
+                dayNumber: day.date.getDate(),
+                hours: day.displayHours,
+                pay: day.total,
+                cumulativePay: runningPay,
+                hasNightShift: day.hasNightShift,
+                windowStart,
+                windowEnd,
+                nightHours,
+                mealVoucher,
+                unpaidBreakMinutes,
+                payCodeTotals,
+              };
+            });
+
+          const maxHours = points.reduce((max, point) => Math.max(max, point.hours), 0);
+          const maxPay = points.reduce((max, point) => Math.max(max, point.pay), 0);
+          const maxCumulativePay = points.reduce((max, point) => Math.max(max, point.cumulativePay), 0);
+
+          return { points, maxHours, maxPay, maxCumulativePay };
+        }, [calendarDays, monthlyShiftBreakdowns]);
+        const hoveredGraphPoint =
+          monthlyGraphData.points.find((point) => point.key === hoveredGraphPointKey) || monthlyGraphData.points[monthlyGraphData.points.length - 1] || null;
+        const currentCalendarMonthLabel = `${MONTH_OPTIONS[Number(calendarMonth.slice(5, 7)) - 1]} ${calendarMonth.slice(0, 4)}`;
+        const maxCalendarDayTotal = useMemo(
+          () =>
+            calendarDays.reduce(
+              (max, day) => (day.inMonth && day.shifts.length > 0 ? Math.max(max, day.total) : max),
+              0,
+            ),
+          [calendarDays],
+        );
+        const minCalendarDayTotal = useMemo(() => {
+          const workedDayTotals = calendarDays
+            .filter((day) => day.inMonth && day.shifts.length > 0)
+            .map((day) => day.total);
+          return workedDayTotals.length > 0 ? Math.min(...workedDayTotals) : 0;
+        }, [calendarDays]);
+        const getCalendarCardClasses = (isSelected, hasShift) => {
+          if (isSelected) {
+            return "border-orange-400 bg-orange-400/10 shadow-[0_0_0_1px_rgba(251,146,60,0.1)] hover:border-orange-300/70";
+          }
+          if (!hasShift) {
+            return "border-white/5 bg-white/[0.015] hover:border-white/10";
+          }
+          return "border-white/10 bg-white/[0.04] hover:border-white/20";
+        };
+        const getPayRelativeIntensity = (dayTotal) => {
+          const range = maxCalendarDayTotal - minCalendarDayTotal;
+          if (range <= 0) {
+            return 1;
+          }
+          return Math.max(0, Math.min(1, (dayTotal - minCalendarDayTotal) / range));
+        };
+        const getAmountTextClasses = (dayTotal) => {
+          const intensity = getPayRelativeIntensity(dayTotal);
+          if (intensity >= 0.8) {
+            return "text-orange-300";
+          }
+          if (intensity >= 0.6) {
+            return "text-amber-300";
+          }
+          if (intensity >= 0.4) {
+            return "text-blue-300";
+          }
+          if (intensity >= 0.2) {
+            return "text-slate-300";
+          }
+          return "text-zinc-300";
+        };
+        const getPayMarkerStyle = (dayTotal) => {
+          const intensity = getPayRelativeIntensity(dayTotal);
+          let color = "rgb(113 113 122)";
+          if (intensity >= 0.8) {
+            color = "rgb(251 146 60)";
+          } else if (intensity >= 0.6) {
+            color = "rgb(245 158 11)";
+          } else if (intensity >= 0.4) {
+            color = "rgb(96 165 250)";
+          } else if (intensity >= 0.2) {
+            color = "rgb(100 116 139)";
+          }
+          return {
+            backgroundColor: color,
+          };
+        };
+        const getDurationChipClasses = (hours) => {
+          if (hours <= 5) {
+            return "border-sky-400/35 bg-sky-500/10 text-sky-200";
+          }
+          if (hours <= 6) {
+            return "border-cyan-400/35 bg-cyan-500/10 text-cyan-200";
+          }
+          return "border-red-400/35 bg-red-500/10 text-red-200";
+        };
         const holiday = getHoliday(currentTime);
-        const progressPercent = Math.min(100, (weeklyStats.totalHours / WEEKLY_GOAL_HOURS) * 100);
         const currentNightBonusFraction = isSundayOrHoliday(currentTime)
           ? NIGHT_SUNDAY_HOLIDAY_BONUS_FRACTION
           : NIGHT_WEEKDAY_BONUS_FRACTION;
@@ -929,18 +1407,18 @@
           (isNightShift(currentTime) && livePayCode !== "S50" ? liveNightExtraRate : 0);
 
         useEffect(() => {
-          if (!session?.autoEndTime) {
+          if (!activeTrackSession?.autoEndTime) {
             autoEndingRef.current = false;
             return;
           }
           if (autoEndingRef.current) return;
-          if (currentTime.getTime() < session.autoEndTime) return;
+          if (currentTime.getTime() < activeTrackSession.autoEndTime) return;
 
           autoEndingRef.current = true;
-          endSession(session.autoEndTime).finally(() => {
+          endSession(activeTrackSession.autoEndTime).finally(() => {
             autoEndingRef.current = false;
           });
-        }, [currentTime, session]);
+        }, [activeTrackSession, currentTime]);
 
         if (loading) {
           return (
@@ -969,12 +1447,102 @@
                     Obiettivo part-time: {WEEKLY_GOAL_HOURS}h / settimana
                   </p>
                 </div>
-                <div className="self-start sm:self-auto bg-white/5 border border-white/10 px-4 py-2 rounded text-[10px] font-bold text-zinc-400 uppercase tracking-widest">
-                  {isLocalMode ? "Modalità locale" : "Sync Firebase"}
-                </div>
+                <button
+                  onClick={() => {
+                    setSettingsOpen((prev) => !prev);
+                    setSettingsStatus("");
+                  }}
+                  className="self-start sm:self-auto rounded border border-white/10 px-4 py-2 text-[10px] font-bold text-zinc-300 uppercase tracking-widest hover:text-white"
+                >
+                  Impostazioni
+                </button>
               </header>
 
-              {!session ? (
+              {settingsOpen && (
+                <section className="mb-6 rounded border border-white/10 bg-zinc-900/70 p-4 sm:p-5 text-left">
+                  <div className="flex items-start justify-between gap-4 mb-4">
+                    <div>
+                      <h2 className="text-sm font-black uppercase tracking-widest text-white">Impostazioni</h2>
+                      <p className="mt-2 text-sm text-zinc-400">
+                        Questo URL viene salvato solo in questo browser. Non viene sincronizzato con Firebase.
+                      </p>
+                    </div>
+                    <button
+                      onClick={() => {
+                        setSettingsOpen(false);
+                        setSettingsStatus("");
+                      }}
+                      className="rounded border border-white/10 px-3 py-2 text-[10px] font-black uppercase tracking-widest text-zinc-300 hover:text-white"
+                    >
+                      Chiudi
+                    </button>
+                  </div>
+                  <label className="block">
+                    <span className="mb-2 block text-[10px] font-bold uppercase tracking-widest text-zinc-500">
+                      URL pubblico iCal Google Calendar
+                    </span>
+                    <input
+                      type="url"
+                      value={googleCalendarIcsUrl}
+                      onChange={(event) => setGoogleCalendarIcsUrl(event.target.value)}
+                      placeholder="https://calendar.google.com/calendar/ical/..."
+                      className="w-full rounded border border-white/10 bg-black/40 px-3 py-3 text-sm font-bold text-white"
+                    />
+                  </label>
+                  <div className="mt-4">
+                    <span className="mb-2 block text-[10px] font-bold uppercase tracking-widest text-zinc-500">
+                      Paghi per il parcheggio?
+                    </span>
+                    <div className="grid grid-cols-2 gap-2">
+                      <button
+                        onClick={() => setPaysForParking(true)}
+                        className={`rounded border px-3 py-3 text-[10px] font-black uppercase tracking-widest transition ${
+                          paysForParking
+                            ? "border-orange-400 bg-orange-400/10 text-orange-200"
+                            : "border-white/10 text-zinc-300 hover:text-white"
+                        }`}
+                      >
+                        Si
+                      </button>
+                      <button
+                        onClick={() => setPaysForParking(false)}
+                        className={`rounded border px-3 py-3 text-[10px] font-black uppercase tracking-widest transition ${
+                          !paysForParking
+                            ? "border-orange-400 bg-orange-400/10 text-orange-200"
+                            : "border-white/10 text-zinc-300 hover:text-white"
+                        }`}
+                      >
+                        No
+                      </button>
+                    </div>
+                  </div>
+                  <p className="mt-3 text-xs text-zinc-500">
+                    Incolla qui l&apos;indirizzo pubblico iCal. All&apos;avvio la pagina prova a leggere gli eventi orari, ignorando gli eventi tutto il giorno e ignorando titolo e descrizione.
+                  </p>
+                  <div className="mt-4 flex flex-wrap gap-2">
+                    <button
+                      onClick={saveSettings}
+                      className="rounded border border-white/10 bg-white px-4 py-3 text-[10px] font-black uppercase tracking-widest text-black hover:bg-zinc-200"
+                    >
+                      Salva impostazioni
+                    </button>
+                    <button
+                      onClick={clearGoogleCalendarIcsUrl}
+                      className="rounded border border-white/10 px-4 py-3 text-[10px] font-black uppercase tracking-widest text-zinc-300 hover:text-white"
+                    >
+                      Rimuovi URL
+                    </button>
+                  </div>
+                  {settingsStatus && (
+                    <p className="mt-3 text-[10px] font-bold uppercase tracking-widest text-zinc-400">{settingsStatus}</p>
+                  )}
+                  {icalSyncStatus && (
+                    <p className="mt-2 text-[10px] font-bold uppercase tracking-widest text-zinc-500">{icalSyncStatus}</p>
+                  )}
+                </section>
+              )}
+
+              {!activeTrackSession ? (
                 <section className="flex flex-col items-center justify-center min-h-[60vh] text-center">
                   <div className="bg-zinc-900/70 border border-white/10 p-6 sm:p-10 rounded w-full max-w-4xl backdrop-blur">
                     <div className="grid grid-cols-3 gap-2 mb-8 rounded bg-black/30 p-1">
@@ -984,7 +1552,7 @@
                           mode === "track" ? "bg-white text-black" : "text-zinc-400 hover:text-white"
                         }`}
                       >
-                        Traccia
+                        Paga Live
                       </button>
                       <button
                         onClick={() => setMode("predict")}
@@ -1005,26 +1573,12 @@
                     </div>
 
                     <h2 className="text-4xl font-black mb-8">
-                      {mode === "track" ? "Inizio turno?" : mode === "predict" ? "Previsione giornata" : "Piano mensile"}
+                      {mode === "track"
+                        ? "Paga Live"
+                        : mode === "predict"
+                          ? "Previsione giornata"
+                          : currentCalendarMonthLabel}
                     </h2>
-
-                    <div className="mb-8 text-left space-y-2 px-2">
-                      <p className="text-[10px] font-bold text-zinc-500 uppercase tracking-widest mb-3">
-                        Maggiorazioni
-                      </p>
-                      <div className="flex justify-between text-xs text-zinc-400">
-                        <span>NTT notturno feriale</span>
-                        <span className="text-sky-300 font-bold">+50%</span>
-                      </div>
-                      <div className="flex justify-between text-xs text-zinc-400">
-                        <span>NTD notturno dom/fest</span>
-                        <span className="text-emerald-300 font-bold">+55%</span>
-                      </div>
-                      <div className="flex justify-between text-xs text-zinc-400">
-                        <span>Supplementare / straordinario / extra notte</span>
-                        <span className="text-yellow-300 font-bold">15% / 25% / 50%</span>
-                      </div>
-                    </div>
 
                     <div className="mb-10 text-left space-y-4">
                       {mode === "track" ? (
@@ -1137,6 +1691,28 @@
                         </div>
                       ) : (
                         <div className="space-y-4">
+                          <div className="grid grid-cols-2 gap-2">
+                            <button
+                              onClick={() => setCalendarView("plan")}
+                              className={`rounded border px-3 py-3 text-[10px] font-black uppercase tracking-widest transition ${
+                                calendarView === "plan"
+                                  ? "border-orange-400 bg-orange-400/10 text-orange-200"
+                                  : "border-white/10 text-zinc-300 hover:text-white"
+                              }`}
+                            >
+                              Calendario
+                            </button>
+                            <button
+                              onClick={() => setCalendarView("graph")}
+                              className={`rounded border px-3 py-3 text-[10px] font-black uppercase tracking-widest transition ${
+                                calendarView === "graph"
+                                  ? "border-orange-400 bg-orange-400/10 text-orange-200"
+                                  : "border-white/10 text-zinc-300 hover:text-white"
+                              }`}
+                            >
+                              Grafico
+                            </button>
+                          </div>
                           <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                             <label className="block">
                               <span className="block text-[10px] font-bold text-zinc-500 uppercase tracking-widest mb-2">
@@ -1186,25 +1762,22 @@
                               </button>
                             ))}
                           </div>
-
+                          {calendarView === "plan" ? (
+                            <>
                           <div className="bg-black/30 border border-white/10 rounded p-3">
                             <div className="sm:hidden space-y-2">
                               {calendarDays
                                 .filter((day) => day.inMonth)
-                                .map((day) => {
+                                .map((day, index) => {
                                   const isSelected = day.dateValue === calendarDate;
                                   const hasShift = day.shifts.length > 0;
+                                  const hasNightShift = day.hasNightShift;
+                                  const startsWeek = day.date.getDay() === 1 && index > 0;
                                   return (
                                     <button
                                       key={day.dateValue}
                                       onClick={() => selectCalendarDay(day.dateValue)}
-                                      className={`w-full rounded border p-3 text-left transition ${
-                                        isSelected
-                                          ? "border-yellow-400 bg-yellow-400/10"
-                                          : hasShift
-                                            ? "border-emerald-500/30 bg-emerald-500/10 hover:border-emerald-300/60"
-                                            : "border-white/10 bg-white/[0.03] hover:border-white/30"
-                                      }`}
+                                      className={`w-full rounded border p-3 text-left align-top transition ${getCalendarCardClasses(isSelected, hasShift)} ${startsWeek ? "mt-4" : ""}`}
                                     >
                                       <div className="flex items-start justify-between gap-3">
                                         <div>
@@ -1215,18 +1788,39 @@
                                               month: "short",
                                             })}
                                           </div>
-                                          <div className="text-[10px] font-bold uppercase tracking-widest text-zinc-500 mt-1">
-                                            {hasShift
-                                              ? `${day.displayHours.toFixed(1)}h`
-                                              : "Nessun turno salvato"}
+                                          <div className="text-[10px] font-bold uppercase tracking-widest text-zinc-500 mt-1 flex items-center gap-1">
+                                            {hasShift ? (
+                                              <>
+                                                {hasNightShift && (
+                                                  <span
+                                                    aria-hidden="true"
+                                                    className="inline-flex h-4 w-4 items-center justify-center rounded border border-violet-300/35 bg-violet-500/12 text-[10px] text-violet-200"
+                                                  >
+                                                    ☾
+                                                  </span>
+                                                )}
+                                                <span
+                                                  className={`inline-flex items-center rounded border px-1.5 py-0.5 text-[10px] font-black normal-case tracking-normal ${getDurationChipClasses(
+                                                    day.displayHours,
+                                                  )}`}
+                                                >
+                                                  {day.displayHours.toFixed(1)}h
+                                                </span>
+                                              </>
+                                            ) : (
+                                              "Nessun turno salvato"
+                                            )}
                                           </div>
                                         </div>
                                         {hasShift && (
                                           <div className="text-right">
-                                            <div className="text-sm font-black text-yellow-200">
+                                            <div className="mb-1 flex justify-end">
+                                              <span className="h-1.5 w-8 rounded-full" style={getPayMarkerStyle(day.total)}></span>
+                                            </div>
+                                            <div className={`text-sm font-black ${getAmountTextClasses(day.total)}`}>
                                               EUR {day.total.toFixed(2)}
                                             </div>
-                                            <div className="text-[10px] font-bold uppercase tracking-widest text-emerald-200 mt-1">
+                                            <div className="text-[10px] font-bold uppercase tracking-widest mt-1 text-zinc-400">
                                               {day.shifts.length} turno{day.shifts.length === 1 ? "" : "i"}
                                             </div>
                                           </div>
@@ -1259,34 +1853,46 @@
                               {calendarDays.map((day) => {
                                 const isSelected = day.dateValue === calendarDate;
                                 const hasShift = day.shifts.length > 0;
+                                const hasNightShift = day.hasNightShift;
                                 return (
                                   <button
                                     key={day.dateValue}
                                     onClick={() => selectCalendarDay(day.dateValue)}
-                                    className={`min-h-24 rounded border p-2 text-left transition ${
-                                      isSelected
-                                        ? "border-yellow-400 bg-yellow-400/10"
-                                        : hasShift
-                                          ? "border-emerald-500/30 bg-emerald-500/10 hover:border-emerald-300/60"
-                                          : "border-white/10 bg-white/[0.03] hover:border-white/30"
-                                    } ${day.inMonth ? "opacity-100" : "opacity-35"}`}
+                                    className={`min-h-24 rounded border p-2 text-left align-top transition ${getCalendarCardClasses(isSelected, hasShift)} ${day.inMonth ? "opacity-100" : "opacity-35"}`}
                                   >
                                     <div className="flex items-start justify-between gap-1">
                                       <span className="text-sm font-black text-white">{day.date.getDate()}</span>
                                       {hasShift && (
-                                        <span className="text-[9px] font-black uppercase tracking-widest text-emerald-200">
-                                          {day.displayHours.toFixed(1)}h
+                                        <span className="flex items-center gap-1">
+                                          {hasNightShift && (
+                                            <span
+                                              aria-hidden="true"
+                                              className="inline-flex h-4 w-4 items-center justify-center rounded border border-violet-300/35 bg-violet-500/12 text-[10px] text-violet-200"
+                                            >
+                                              ☾
+                                            </span>
+                                          )}
+                                          <span
+                                            className={`inline-flex items-center rounded border px-1.5 py-0.5 text-[9px] font-black tracking-normal ${getDurationChipClasses(
+                                              day.displayHours,
+                                            )}`}
+                                          >
+                                            {day.displayHours.toFixed(1)}h
+                                          </span>
                                         </span>
                                       )}
                                     </div>
                                     {hasShift && (
                                       <div className="mt-2 space-y-1">
+                                        <div className="flex justify-end">
+                                          <span className="h-1 w-6 rounded-full" style={getPayMarkerStyle(day.total)}></span>
+                                        </div>
                                         {day.shifts.slice(0, 2).map((shift) => (
                                           <div key={shift.id} className="truncate text-[10px] font-bold text-zinc-300">
                                             {shift.startTime}-{shift.endTime}
                                           </div>
                                         ))}
-                                        <div className="text-[10px] font-black text-yellow-200">
+                                        <div className={`text-[10px] font-black ${getAmountTextClasses(day.total)}`}>
                                           EUR {day.total.toFixed(2)}
                                         </div>
                                       </div>
@@ -1347,7 +1953,7 @@
                             onClick={saveCalendarShift}
                             className="w-full bg-white text-black py-4 rounded text-sm font-extrabold hover:bg-yellow-400 transition-all active:scale-[0.99] uppercase tracking-widest"
                           >
-                            {editingCalendarShiftId ? "Aggiorna turno" : "Aggiungi turno"}
+                            {editingCalendarShiftId ? "Aggiorna turno" : "Aggiungi turno locale"}
                           </button>
 
                           <div className="bg-black/30 border border-white/10 rounded p-4 text-left">
@@ -1418,42 +2024,41 @@
                                 .map(([code, hours]) => (
                                   <span
                                     key={code}
-                                    className="bg-yellow-500/10 border border-yellow-500/30 text-yellow-200 text-[9px] font-black px-2 py-1 rounded uppercase tracking-tight"
+                                    className="bg-white/[0.04] border border-white/10 text-zinc-300 text-[9px] font-black px-2 py-1 rounded uppercase tracking-tight"
                                   >
                                     {getPayCode(code).label}: {hours.toFixed(2)}h
                                   </span>
                                 ))}
                               {monthlyPrediction.nightWeekdayExtra > 0 && (
-                                <span className="bg-sky-500/10 border border-sky-500/30 text-sky-200 text-[9px] font-black px-2 py-1 rounded uppercase tracking-tight">
+                                <span className="bg-white/[0.04] border border-white/10 text-zinc-300 text-[9px] font-black px-2 py-1 rounded uppercase tracking-tight">
                                   NTT: +EUR {monthlyPrediction.nightWeekdayExtra.toFixed(2)}
                                 </span>
                               )}
                               {monthlyPrediction.nightSundayHolidayExtra > 0 && (
-                                <span className="bg-emerald-500/10 border border-emerald-500/30 text-emerald-200 text-[9px] font-black px-2 py-1 rounded uppercase tracking-tight">
+                                <span className="bg-white/[0.04] border border-white/10 text-zinc-300 text-[9px] font-black px-2 py-1 rounded uppercase tracking-tight">
                                   NTD: +EUR {monthlyPrediction.nightSundayHolidayExtra.toFixed(2)}
                                 </span>
                               )}
                               {monthlyPrediction.unpaidBreakMs > 0 && (
-                                <span className="bg-red-500/10 border border-red-500/30 text-red-200 text-[9px] font-black px-2 py-1 rounded uppercase tracking-tight">
+                                <span className="bg-red-500/[0.06] border border-red-400/15 text-red-200/80 text-[9px] font-black px-2 py-1 rounded uppercase tracking-tight">
                                   Pausa pranzo: -{monthlyPrediction.unpaidBreakMs / 60000} min
                                 </span>
                               )}
-                              <span className="bg-sky-500/10 border border-sky-500/30 text-sky-200 text-[9px] font-black px-2 py-1 rounded uppercase tracking-tight">
+                              <span className="bg-red-500/[0.06] border border-red-400/15 text-red-200/80 text-[9px] font-black px-2 py-1 rounded uppercase tracking-tight">
                                 Trattenute busta: -EUR {monthlyPrediction.payslipNetEstimate.totalDeductions.toFixed(2)}
                               </span>
-                              <span className="bg-emerald-500/10 border border-emerald-500/30 text-emerald-200 text-[9px] font-black px-2 py-1 rounded uppercase tracking-tight">
+                              <span className="bg-white/[0.04] border border-white/10 text-zinc-300 text-[9px] font-black px-2 py-1 rounded uppercase tracking-tight">
                                 Crediti busta: +EUR {monthlyPrediction.payslipNetEstimate.totalCredits.toFixed(2)}
                               </span>
                             </div>
                           </div>
 
                           <div className="space-y-2 text-left">
-                            {monthlyShifts.length === 0 ? (
+                            {monthlyShiftBreakdowns.length === 0 ? (
                               <p className="text-sm text-zinc-500 text-center py-4">Nessun turno salvato per questo mese.</p>
                             ) : (
-                              monthlyShifts.map((shift) => {
-                                const { start, end } = getShiftRange(shift.date, shift.startTime, shift.endTime);
-                                const shiftBreakdown = calculateBreakdown(start.getTime(), end.getTime(), 0);
+                              monthlyShiftBreakdowns.map(({ shift, totalWithVoucher }) => {
+                                const isImportedShift = shift.source === "ical";
                                 return (
                                   <div
                                     key={shift.id}
@@ -1468,24 +2073,35 @@
                                           {shift.note}
                                         </div>
                                       )}
+                                      {isImportedShift && (
+                                        <div className="text-[10px] font-bold uppercase tracking-widest text-zinc-500">
+                                          Importato da iCal
+                                        </div>
+                                      )}
                                       <div className="text-[10px] font-bold uppercase tracking-widest text-zinc-500">
-                                        EUR {(shiftBreakdown.total + shiftBreakdown.mealVoucher).toFixed(2)} stima
+                                        EUR {totalWithVoucher.toFixed(2)} stima
                                       </div>
                                     </div>
-                                    <div className="flex gap-2">
-                                      <button
-                                        onClick={() => editCalendarShift(shift)}
-                                        className="rounded border border-white/10 px-3 py-2 text-[10px] font-black uppercase tracking-widest text-zinc-300 hover:text-white"
-                                      >
-                                        Modifica
-                                      </button>
-                                      <button
-                                        onClick={() => deleteCalendarShift(shift.id)}
-                                        className="rounded border border-red-500/30 px-3 py-2 text-[10px] font-black uppercase tracking-widest text-red-300 hover:text-red-100"
-                                      >
-                                        Elimina
-                                      </button>
-                                    </div>
+                                    {isImportedShift ? (
+                                      <div className="rounded border border-white/10 px-3 py-2 text-[10px] font-black uppercase tracking-widest text-zinc-500">
+                                        Sola lettura
+                                      </div>
+                                    ) : (
+                                      <div className="flex gap-2">
+                                        <button
+                                          onClick={() => editCalendarShift(shift)}
+                                          className="rounded border border-white/10 px-3 py-2 text-[10px] font-black uppercase tracking-widest text-zinc-300 hover:text-white"
+                                        >
+                                          Modifica
+                                        </button>
+                                        <button
+                                          onClick={() => deleteCalendarShift(shift.id)}
+                                          className="rounded border border-red-500/30 px-3 py-2 text-[10px] font-black uppercase tracking-widest text-red-300 hover:text-red-100"
+                                        >
+                                          Elimina
+                                        </button>
+                                      </div>
+                                    )}
                                   </div>
                                 );
                               })
@@ -1504,23 +2120,269 @@
                               </p>
                             )}
                           </div>
+                            </>
+                          ) : (
+                            <div className="bg-black/30 border border-white/10 rounded p-4">
+                              <div className="flex flex-wrap items-start justify-between gap-3 mb-4">
+                                <div>
+                                  <p className="text-[10px] font-black text-zinc-500 uppercase tracking-widest mb-2">
+                                    Ore e paga giornaliere
+                                  </p>
+                                  <p className="text-sm font-bold text-zinc-300">
+                                    Giorni liberi esclusi. Barre = ore lavorate, linea = paga stimata del giorno.
+                                  </p>
+                                </div>
+                                <div className="flex flex-wrap gap-2 text-[9px] font-black uppercase tracking-widest">
+                                  {[
+                                    { key: "both", label: "Entrambe" },
+                                    { key: "hours", label: "Solo ore" },
+                                    { key: "pay", label: "Solo paga" },
+                                  ].map((option) => (
+                                    <button
+                                      key={option.key}
+                                      onClick={() => setCalendarGraphMode(option.key)}
+                                      className={`rounded border px-2 py-1 transition ${
+                                        calendarGraphMode === option.key
+                                          ? "border-orange-400 bg-orange-400/10 text-orange-200"
+                                          : "border-white/10 bg-white/[0.04] text-zinc-300 hover:text-white"
+                                      }`}
+                                    >
+                                      {option.label}
+                                    </button>
+                                  ))}
+                                </div>
+                                <div className="flex flex-wrap gap-2 text-[9px] font-black uppercase tracking-widest">
+                                  {[
+                                    { key: "daily", label: "Paga giornaliera" },
+                                    { key: "cumulative", label: "Paga cumulata" },
+                                  ].map((option) => (
+                                    <button
+                                      key={option.key}
+                                      onClick={() => setCalendarPayLineMode(option.key)}
+                                      className={`rounded border px-2 py-1 transition ${
+                                        calendarPayLineMode === option.key
+                                          ? "border-orange-400 bg-orange-400/10 text-orange-200"
+                                          : "border-white/10 bg-white/[0.04] text-zinc-300 hover:text-white"
+                                      }`}
+                                    >
+                                      {option.label}
+                                    </button>
+                                  ))}
+                                </div>
+                              </div>
+                              {monthlyGraphData.points.length === 0 ? (
+                                <p className="py-8 text-center text-sm text-zinc-500">
+                                  Nessun turno salvato per questo mese.
+                                </p>
+                              ) : (
+                                <div className="space-y-4">
+                                  <div className="overflow-x-auto">
+                                    <svg
+                                      viewBox={`0 0 ${Math.max(720, monthlyGraphData.points.length * 44)} 280`}
+                                      className="w-full min-w-[720px]"
+                                      role="img"
+                                      aria-label="Grafico ore e paga del mese"
+                                    >
+                                      {(() => {
+                                        const width = Math.max(720, monthlyGraphData.points.length * 44);
+                                        const height = 280;
+                                        const left = 40;
+                                        const right = 28;
+                                        const top = 16;
+                                        const bottom = 42;
+                                        const plotWidth = width - left - right;
+                                        const plotHeight = height - top - bottom;
+                                        const step = monthlyGraphData.points.length > 1 ? plotWidth / (monthlyGraphData.points.length - 1) : 0;
+                                        const maxHours = Math.max(8, monthlyGraphData.maxHours);
+                                        const paySeriesMax =
+                                          calendarPayLineMode === "cumulative"
+                                            ? Math.max(60, monthlyGraphData.maxCumulativePay)
+                                            : Math.max(60, monthlyGraphData.maxPay);
+                                        const showHours = calendarGraphMode === "both" || calendarGraphMode === "hours";
+                                        const showPay = calendarGraphMode === "both" || calendarGraphMode === "pay";
+                                        const payPath = showPay
+                                          ? monthlyGraphData.points
+                                          .map((point, index) => {
+                                            const x = left + step * index;
+                                            const payValue = calendarPayLineMode === "cumulative" ? point.cumulativePay : point.pay;
+                                            const y = top + plotHeight - (payValue / paySeriesMax) * plotHeight;
+                                            return `${index === 0 ? "M" : "L"} ${x} ${y}`;
+                                          })
+                                          .join(" ")
+                                          : "";
+
+                                        return (
+                                          <>
+                                            {[0, 0.25, 0.5, 0.75, 1].map((tick) => {
+                                              const y = top + plotHeight - plotHeight * tick;
+                                              return (
+                                                <g key={tick}>
+                                                  <line
+                                                    x1={left}
+                                                    y1={y}
+                                                    x2={width - right}
+                                                    y2={y}
+                                                    stroke="rgba(255,255,255,0.08)"
+                                                    strokeWidth="1"
+                                                  />
+                                                  <text
+                                                    x={left - 8}
+                                                    y={y + 4}
+                                                    textAnchor="end"
+                                                    fill="rgba(161,161,170,0.9)"
+                                                    fontSize="10"
+                                                    fontWeight="700"
+                                                  >
+                                                    {(maxHours * tick).toFixed(tick === 0 ? 0 : 1)}h
+                                                  </text>
+                                                </g>
+                                              );
+                                            })}
+                                            {monthlyGraphData.points.map((point, index) => {
+                                              const x = left + step * index;
+                                              const barWidth = Math.max(10, Math.min(22, step * 0.45 || 22));
+                                              const barHeight = (point.hours / maxHours) * plotHeight;
+                                              const barY = top + plotHeight - barHeight;
+                                              const payValue = calendarPayLineMode === "cumulative" ? point.cumulativePay : point.pay;
+                                              const payY = top + plotHeight - (payValue / paySeriesMax) * plotHeight;
+                                              return (
+                                                <g key={point.key}>
+                                                  {showHours && (
+                                                  <rect
+                                                    x={x - barWidth / 2}
+                                                    y={barY}
+                                                    width={barWidth}
+                                                    height={barHeight}
+                                                    rx="4"
+                                                    fill={point.hasNightShift ? "rgba(139,92,246,0.42)" : "rgba(161,161,170,0.5)"}
+                                                    className="cursor-pointer"
+                                                    onMouseEnter={() => setHoveredGraphPointKey(point.key)}
+                                                    onFocus={() => setHoveredGraphPointKey(point.key)}
+                                                      onClick={() => selectCalendarDay(point.key)}
+                                                    />
+                                                  )}
+                                                  {showPay && (
+                                                    <circle
+                                                      cx={x}
+                                                      cy={payY}
+                                                      r="5"
+                                                      fill="rgb(253 186 116)"
+                                                      className="cursor-pointer"
+                                                      onMouseEnter={() => setHoveredGraphPointKey(point.key)}
+                                                      onFocus={() => setHoveredGraphPointKey(point.key)}
+                                                      onClick={() => selectCalendarDay(point.key)}
+                                                    />
+                                                  )}
+                                                  <rect
+                                                    x={x - Math.max(14, barWidth)}
+                                                    y={top}
+                                                    width={Math.max(28, barWidth * 2)}
+                                                    height={plotHeight}
+                                                    fill="transparent"
+                                                    className="cursor-pointer"
+                                                    onMouseEnter={() => setHoveredGraphPointKey(point.key)}
+                                                    onFocus={() => setHoveredGraphPointKey(point.key)}
+                                                    onClick={() => selectCalendarDay(point.key)}
+                                                  />
+                                                  <text
+                                                    x={x}
+                                                    y={height - 16}
+                                                    textAnchor="middle"
+                                                    fill="rgba(212,212,216,0.85)"
+                                                    fontSize="10"
+                                                    fontWeight="700"
+                                                  >
+                                                    {String(point.dayNumber).padStart(2, "0")}
+                                                  </text>
+                                                </g>
+                                              );
+                                            })}
+                                            {showPay && (
+                                              <path
+                                                d={payPath}
+                                                fill="none"
+                                                stroke="rgb(253 186 116)"
+                                                strokeWidth="2.5"
+                                                strokeLinejoin="round"
+                                                strokeLinecap="round"
+                                              />
+                                            )}
+                                          </>
+                                        );
+                                      })()}
+                                    </svg>
+                                  </div>
+                                  <div className="rounded border border-white/10 bg-white/[0.04] p-3 text-left">
+                                    <p className="mb-2 text-[10px] font-black uppercase tracking-widest text-zinc-500">
+                                      Informazioni sul giorno
+                                    </p>
+                                    {hoveredGraphPoint && (
+                                      <>
+                                        <div className="text-sm font-black text-white">{hoveredGraphPoint.key}</div>
+                                        {hoveredGraphPoint.windowStart && hoveredGraphPoint.windowEnd && (
+                                          <>
+                                            <div className="mt-2 text-[10px] font-black uppercase tracking-widest text-zinc-400">
+                                              Finestra oraria
+                                            </div>
+                                            <div className="text-lg font-black text-white">
+                                              {hoveredGraphPoint.windowStart}-{hoveredGraphPoint.windowEnd}
+                                            </div>
+                                          </>
+                                        )}
+                                        <div className="mt-2 text-[10px] font-black uppercase tracking-widest text-zinc-400">
+                                          Ore
+                                        </div>
+                                        <div className="text-lg font-black text-white">{hoveredGraphPoint.hours.toFixed(1)}h</div>
+                                        {hoveredGraphPoint.nightHours > 0 && (
+                                          <>
+                                            <div className="mt-2 text-[10px] font-black uppercase tracking-widest text-zinc-400">
+                                              Ore notturne
+                                            </div>
+                                            <div className="text-lg font-black text-violet-200">
+                                              {hoveredGraphPoint.nightHours.toFixed(1)}h
+                                            </div>
+                                          </>
+                                        )}
+                                        <div className="mt-2 text-[10px] font-black uppercase tracking-widest text-zinc-400">
+                                          {calendarPayLineMode === "cumulative" ? "Paga cumulata" : "Paga"}
+                                        </div>
+                                        <div className="text-lg font-black text-orange-200">
+                                          EUR {(calendarPayLineMode === "cumulative" ? hoveredGraphPoint.cumulativePay : hoveredGraphPoint.pay).toFixed(2)}
+                                        </div>
+                                        <div className="mt-3 flex flex-wrap gap-2">
+                                          {Object.entries(hoveredGraphPoint.payCodeTotals)
+                                            .filter(([, hours]) => hours > 0)
+                                            .map(([code, hours]) => (
+                                              <span
+                                                key={code}
+                                                className="rounded border border-white/10 bg-white/[0.04] px-2 py-1 text-[9px] font-black uppercase tracking-tight text-zinc-300"
+                                              >
+                                                {getPayCode(code).label}: {hours.toFixed(2)}h
+                                              </span>
+                                            ))}
+                                          {hoveredGraphPoint.mealVoucher > 0 && (
+                                            <span className="rounded border border-white/10 bg-white/[0.04] px-2 py-1 text-[9px] font-black uppercase tracking-tight text-zinc-300">
+                                              Buono pasto: EUR {hoveredGraphPoint.mealVoucher.toFixed(2)}
+                                            </span>
+                                          )}
+                                          {hoveredGraphPoint.unpaidBreakMinutes > 0 && (
+                                            <span className="rounded border border-red-400/15 bg-red-500/[0.06] px-2 py-1 text-[9px] font-black uppercase tracking-tight text-red-200/80">
+                                              Pausa pranzo: -{hoveredGraphPoint.unpaidBreakMinutes.toFixed(0)} min
+                                            </span>
+                                          )}
+                                        </div>
+                                      </>
+                                    )}
+                                  </div>
+                                </div>
+                              )}
+                            </div>
+                          )}
                         </div>
                       )}
 
-                      <div className="flex justify-between text-xs font-bold text-zinc-500 uppercase tracking-widest">
-                        <span>Obiettivo settimanale</span>
-                        <span>
-                          {weeklyStats.totalHours.toFixed(1)} / {WEEKLY_GOAL_HOURS}h
-                        </span>
-                      </div>
-                      <div className="h-2 bg-white/5 rounded overflow-hidden">
-                        <div
-                          className="h-full bg-yellow-400 transition-all duration-1000"
-                          style={{ width: `${progressPercent}%` }}
-                        ></div>
-                      </div>
                     </div>
-                    {mode === "track" && (
+                    {mode === "track" && !activeTrackSession && (
                       <button
                         onClick={startSession}
                         className="w-full bg-white text-black py-5 rounded text-xl font-extrabold hover:bg-yellow-400 transition-all active:scale-[0.99] uppercase tracking-tight"
@@ -1545,6 +2407,11 @@
                     <p className="text-sm text-zinc-500 mb-6">
                       {activeAutoEndLabel ? `Salvataggio automatico alle ${activeAutoEndLabel}` : "Salvataggio manuale"}
                     </p>
+                    {activeTrackSession.autoPrefilled && (
+                      <p className="mb-4 text-[10px] font-black uppercase tracking-widest text-zinc-500">
+                        Oggi sono gia presenti ore salvate
+                      </p>
+                    )}
                     <div className="flex flex-wrap justify-center gap-3">
                       {Object.entries(currentBreakdown.payCodeTotals)
                         .filter(([, hours]) => hours > 0)
@@ -1595,7 +2462,7 @@
                           </svg>
                         </button>
                         <span className="text-2xl font-bold tabular-nums">
-                          {new Date(session.startTime).toLocaleTimeString("it-IT", {
+                          {new Date(activeTrackSession.startTime).toLocaleTimeString("it-IT", {
                             hour: "2-digit",
                             minute: "2-digit",
                           })}
@@ -1648,7 +2515,7 @@
                         Fine automatica
                       </p>
                       <select
-                        value={session?.autoEndTime ? formatTimeInput(new Date(session.autoEndTime)) : ""}
+                        value={activeTrackSession?.autoEndTime ? formatTimeInput(new Date(activeTrackSession.autoEndTime)) : ""}
                         onChange={(event) => updateSessionAutoEnd(event.target.value)}
                         className="w-full bg-black/40 border border-white/10 rounded px-3 py-3 text-sm font-bold text-white"
                       >
