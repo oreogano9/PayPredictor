@@ -174,7 +174,19 @@
         "2026-03": { label: "Marzo 2026 busta paga", shifts: MARCH_2026_SHIFTS },
         "2026-04": { label: "Aprile 2026 piano", shifts: APRIL_2026_SHIFTS },
       };
+      const SEEDED_SHIFT_KEYS = new Set(
+        Object.values(SEEDED_MONTHS)
+          .flatMap((month) => month.shifts)
+          .map((shift) => `${shift.date}|${shift.startTime}|${shift.endTime}`),
+      );
       const DEFAULT_CALENDAR_SHIFTS = [];
+
+      function isSeededTestShift(shift) {
+        return (
+          String(shift.id).startsWith("seed-") ||
+          SEEDED_SHIFT_KEYS.has(`${shift.date}|${shift.startTime}|${shift.endTime}`)
+        );
+      }
 
       function readLocalState() {
         const fallback = { session: null, weeklyStats: { totalHours: 0, totalEarned: 0 }, calendarShifts: DEFAULT_CALENDAR_SHIFTS };
@@ -569,7 +581,7 @@
               const text = await response.text();
               const shifts = parsePublicIcsToShifts(text);
               if (cancelled) return;
-              const localShiftsWithoutSeeds = calendarShifts.filter((shift) => !String(shift.id).startsWith("seed-"));
+              const localShiftsWithoutSeeds = calendarShifts.filter((shift) => !isSeededTestShift(shift));
               if (!cleanedSeedShiftsRef.current && localShiftsWithoutSeeds.length !== calendarShifts.length) {
                 cleanedSeedShiftsRef.current = true;
                 setCalendarShifts(localShiftsWithoutSeeds);
@@ -593,7 +605,12 @@
 
         const allCalendarShifts = useMemo(
           () =>
-            [...calendarShifts, ...importedCalendarShifts].sort((a, b) =>
+            [
+              ...(importedCalendarShifts.length > 0
+                ? calendarShifts.filter((shift) => !isSeededTestShift(shift))
+                : calendarShifts),
+              ...importedCalendarShifts,
+            ].sort((a, b) =>
               `${a.date} ${a.startTime}`.localeCompare(`${b.date} ${b.startTime}`),
             ),
           [calendarShifts, importedCalendarShifts],
