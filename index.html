@@ -174,7 +174,7 @@
         "2026-03": { label: "Marzo 2026 busta paga", shifts: MARCH_2026_SHIFTS },
         "2026-04": { label: "Aprile 2026 piano", shifts: APRIL_2026_SHIFTS },
       };
-      const DEFAULT_CALENDAR_SHIFTS = [...MARCH_2026_SHIFTS, ...APRIL_2026_SHIFTS];
+      const DEFAULT_CALENDAR_SHIFTS = [];
 
       function readLocalState() {
         const fallback = { session: null, weeklyStats: { totalHours: 0, totalEarned: 0 }, calendarShifts: DEFAULT_CALENDAR_SHIFTS };
@@ -400,6 +400,7 @@
         const [icalSyncStatus, setIcalSyncStatus] = useState("");
         const [currentTime, setCurrentTime] = useState(new Date());
         const autoEndingRef = useRef(false);
+        const cleanedSeedShiftsRef = useRef(false);
         const [loading, setLoading] = useState(true);
         const [services, setServices] = useState(null);
         const isLocalMode = !firebaseConfig;
@@ -568,6 +569,12 @@
               const text = await response.text();
               const shifts = parsePublicIcsToShifts(text);
               if (cancelled) return;
+              const localShiftsWithoutSeeds = calendarShifts.filter((shift) => !String(shift.id).startsWith("seed-"));
+              if (!cleanedSeedShiftsRef.current && localShiftsWithoutSeeds.length !== calendarShifts.length) {
+                cleanedSeedShiftsRef.current = true;
+                setCalendarShifts(localShiftsWithoutSeeds);
+                await saveState({ calendarShifts: localShiftsWithoutSeeds });
+              }
               setImportedCalendarShifts(shifts);
               setIcalSyncStatus(`Calendario importato: ${shifts.length} turni letti`);
             } catch (error) {
@@ -582,7 +589,7 @@
           return () => {
             cancelled = true;
           };
-        }, [googleCalendarIcsUrl]);
+        }, [calendarShifts, googleCalendarIcsUrl]);
 
         const allCalendarShifts = useMemo(
           () =>
