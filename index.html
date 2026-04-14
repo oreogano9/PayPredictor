@@ -1516,7 +1516,7 @@
                 </section>
               )}
 
-              {!activeTrackSession ? (
+              {!activeTrackSession || mode !== "track" ? (
                 <section className="flex flex-col items-center justify-center min-h-[60vh] text-center">
                   <div className="bg-zinc-900/70 border border-white/10 p-6 sm:p-10 rounded w-full max-w-4xl backdrop-blur">
                     <div className="grid grid-cols-3 gap-2 mb-8 rounded bg-black/30 p-1">
@@ -2357,6 +2357,32 @@
                 </section>
               ) : (
                 <section className="flex flex-col items-center">
+                  <div className="grid grid-cols-3 gap-2 mb-8 rounded bg-black/30 p-1 w-full">
+                    <button
+                      onClick={() => setMode("track")}
+                      className={`rounded px-4 py-3 text-xs font-black uppercase tracking-widest transition ${
+                        mode === "track" ? "bg-white text-black" : "text-zinc-400 hover:text-white"
+                      }`}
+                    >
+                      Paga Live
+                    </button>
+                    <button
+                      onClick={() => setMode("predict")}
+                      className={`rounded px-4 py-3 text-xs font-black uppercase tracking-widest transition ${
+                        mode === "predict" ? "bg-white text-black" : "text-zinc-400 hover:text-white"
+                      }`}
+                    >
+                      Prevedi
+                    </button>
+                    <button
+                      onClick={() => setMode("calendar")}
+                      className={`rounded px-4 py-3 text-xs font-black uppercase tracking-widest transition ${
+                        mode === "calendar" ? "bg-white text-black" : "text-zinc-400 hover:text-white"
+                      }`}
+                    >
+                      Calendario
+                    </button>
+                  </div>
                   <div className="text-center mb-10 w-full">
                     <div className="text-[4.5rem] sm:text-[6rem] md:text-[8rem] font-black tabular-nums leading-none tracking-tight mb-4 break-words">
                       EUR {currentBreakdown.total.toLocaleString("it-IT", {
