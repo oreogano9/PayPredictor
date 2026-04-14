@@ -1393,9 +1393,6 @@
                       </span>
                     )}
                   </h1>
-                  <p className="text-zinc-500 text-xs uppercase tracking-widest font-semibold mt-1">
-                    Obiettivo part-time: {WEEKLY_GOAL_HOURS}h / settimana
-                  </p>
                 </div>
                 <button
                   onClick={() => {
@@ -2334,23 +2331,12 @@
               ) : (
                 <section className="flex flex-col items-center">
                   <div className="text-center mb-10 w-full">
-                    <p className="text-[10px] font-black uppercase tracking-[0.3em] text-zinc-500 mb-4">
-                      Turno in corso
-                    </p>
                     <div className="text-[4.5rem] sm:text-[6rem] md:text-[8rem] font-black tabular-nums leading-none tracking-tight mb-4 break-words">
                       EUR {currentBreakdown.total.toLocaleString("it-IT", {
                         minimumFractionDigits: 2,
                         maximumFractionDigits: 2,
                       })}
                     </div>
-                    <p className="text-sm text-zinc-500 mb-6">
-                      {activeAutoEndLabel ? `Salvataggio automatico alle ${activeAutoEndLabel}` : "Salvataggio manuale"}
-                    </p>
-                    {activeTrackSession.autoPrefilled && (
-                      <p className="mb-4 text-[10px] font-black uppercase tracking-widest text-zinc-500">
-                        Oggi sono gia presenti ore salvate
-                      </p>
-                    )}
                     <div className="flex flex-wrap justify-center gap-3">
                       {Object.entries(currentBreakdown.payCodeTotals)
                         .filter(([, hours]) => hours > 0)
@@ -2385,12 +2371,12 @@
                     </div>
                   </div>
 
-                  <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-4 gap-4 w-full mb-10">
-                    <div className="bg-zinc-900/70 border border-white/10 p-5 rounded text-center">
-                      <p className="text-[10px] font-bold text-zinc-500 uppercase mb-4 tracking-widest">
+                  <div className="grid grid-cols-2 lg:grid-cols-4 gap-2 w-full mb-4">
+                    <div className="bg-white/[0.04] border border-white/10 p-3 rounded text-left">
+                      <p className="text-[9px] font-black text-zinc-500 uppercase mb-3 tracking-widest">
                         Ora inizio
                       </p>
-                      <div className="flex items-center justify-between px-2">
+                      <div className="flex items-center justify-between gap-2">
                         <button
                           onClick={() => adjustStart(-30)}
                           className="text-zinc-500 hover:text-white"
@@ -2417,8 +2403,8 @@
                         </button>
                       </div>
                     </div>
-                    <div className="bg-zinc-900/70 border border-white/10 p-5 rounded text-center">
-                      <p className="text-[10px] font-bold text-zinc-500 uppercase mb-4 tracking-widest">
+                    <div className="bg-white/[0.04] border border-white/10 p-3 rounded text-left">
+                      <p className="text-[9px] font-black text-zinc-500 uppercase mb-3 tracking-widest">
                         Trascorso
                       </p>
                       <span className="text-2xl font-bold tabular-nums">
@@ -2432,8 +2418,8 @@
                           .padStart(2, "0")}
                       </span>
                     </div>
-                    <div className="bg-zinc-900/70 border border-white/10 p-5 rounded text-center">
-                      <p className="text-[10px] font-bold text-zinc-500 uppercase mb-4 tracking-widest">
+                    <div className="bg-white/[0.04] border border-white/10 p-3 rounded text-left">
+                      <p className="text-[9px] font-black text-zinc-500 uppercase mb-3 tracking-widest">
                         Tariffa stimata
                       </p>
                       <span
@@ -2443,14 +2429,9 @@
                       >
                         EUR {liveRate.toFixed(2)}
                       </span>
-                      <p className="text-[10px] font-bold uppercase tracking-widest text-zinc-500 mt-3">
-                        {isNightShift(currentTime)
-                          ? "Calcolo busta con maggiorazione notte"
-                          : "Calcolo busta oraria stimata"}
-                      </p>
                     </div>
-                    <div className="bg-zinc-900/70 border border-white/10 p-5 rounded text-center">
-                      <p className="text-[10px] font-bold text-zinc-500 uppercase mb-4 tracking-widest">
+                    <div className="bg-white/[0.04] border border-white/10 p-3 rounded text-left">
+                      <p className="text-[9px] font-black text-zinc-500 uppercase mb-3 tracking-widest">
                         Fine automatica
                       </p>
                       <select
@@ -2467,11 +2448,23 @@
                           </option>
                         ))}
                       </select>
-                      <p className="text-[10px] font-bold uppercase tracking-widest text-zinc-500 mt-3">
-                        {activeAutoEndLabel ? `Salva alle ${activeAutoEndLabel}` : "Nessuna ora impostata"}
-                      </p>
                     </div>
                   </div>
+
+                  <details className="w-full mb-10 rounded border border-white/10 bg-white/[0.03] p-3 text-left">
+                    <summary className="cursor-pointer text-[10px] font-black uppercase tracking-widest text-zinc-400">
+                      Totale di oggi
+                    </summary>
+                    <div className="mt-3 text-2xl font-black text-white">
+                      EUR {currentBreakdown.total.toLocaleString("it-IT", {
+                        minimumFractionDigits: 2,
+                        maximumFractionDigits: 2,
+                      })}
+                    </div>
+                    <div className="mt-2 text-xs font-bold uppercase tracking-widest text-zinc-500">
+                      {(currentBreakdown.paidElapsed / 3600000).toFixed(2)}h pagate
+                    </div>
+                  </details>
 
                   <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 w-full max-w-2xl">
                     <button
