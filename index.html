@@ -107,85 +107,10 @@
         "2027-03-29": "Lunedi dell'Angelo",
       };
 
-      const buildSeedShifts = (rows) =>
-        rows.map(([date, startTime, endTime, note]) => ({
-          id: `seed-${date}-${startTime}`,
-          date,
-          startTime,
-          endTime,
-          note,
-        }));
-
-      const MARCH_2026_SHIFTS = buildSeedShifts([
-        ["2026-03-01", "09:00", "17:00", "Formazione iniziale"],
-        ["2026-03-02", "17:00", "23:00", "617"],
-        ["2026-03-03", "09:00", "17:00", "617"],
-        ["2026-03-04", "12:00", "18:00", "617"],
-        ["2026-03-06", "09:00", "14:00", "511"],
-        ["2026-03-07", "07:00", "15:00", "607"],
-        ["2026-03-08", "07:00", "13:00", "607"],
-        ["2026-03-09", "08:00", "16:00", "509"],
-        ["2026-03-10", "08:00", "13:00", "509"],
-        ["2026-03-13", "08:00", "16:00", "515"],
-        ["2026-03-14", "10:00", "18:00", "515"],
-        ["2026-03-15", "11:00", "16:00", "515"],
-        ["2026-03-16", "08:00", "16:00", "515"],
-        ["2026-03-18", "03:00", "11:00", "647"],
-        ["2026-03-19", "03:00", "11:00", "647"],
-        ["2026-03-20", "03:00", "11:00", "647"],
-        ["2026-03-22", "06:00", "11:00", "505"],
-        ["2026-03-23", "06:00", "14:00", "503"],
-        ["2026-03-24", "05:00", "13:00", "503"],
-        ["2026-03-25", "05:00", "13:00", "503"],
-        ["2026-03-27", "13:00", "18:00", "519"],
-        ["2026-03-28", "09:00", "17:00", "519"],
-        ["2026-03-29", "13:00", "18:00", "519"],
-        ["2026-03-30", "16:00", "22:00", "619"],
-      ]);
-
-      const APRIL_2026_SHIFTS = buildSeedShifts([
-        ["2026-04-02", "05:00", "13:00", "503"],
-        ["2026-04-03", "09:00", "17:00", "503"],
-        ["2026-04-04", "05:00", "10:00", "503"],
-        ["2026-04-05", "05:00", "10:00", "503 Pasqua"],
-        ["2026-04-06", "05:00", "10:00", "503 Lunedi dell'Angelo"],
-        ["2026-04-08", "08:00", "16:00", "613"],
-        ["2026-04-09", "08:00", "16:00", "613"],
-        ["2026-04-10", "09:00", "17:00", "613"],
-        ["2026-04-11", "08:00", "16:00", "613"],
-        ["2026-04-12", "10:00", "16:00", "613"],
-        ["2026-04-14", "15:00", "23:00", "529"],
-        ["2026-04-15", "18:00", "02:00", "529"],
-        ["2026-04-16", "18:00", "23:00", "529"],
-        ["2026-04-17", "17:00", "22:00", "527"],
-        ["2026-04-18", "17:00", "22:00", "527"],
-        ["2026-04-20", "10:00", "15:00", "513"],
-        ["2026-04-21", "10:00", "15:00", "513"],
-        ["2026-04-22", "10:00", "15:00", "513"],
-        ["2026-04-24", "10:00", "15:00", "513"],
-        ["2026-04-25", "10:00", "15:00", "513 Liberazione"],
-        ["2026-04-26", "17:00", "22:00", "527"],
-        ["2026-04-27", "17:00", "22:00", "527"],
-        ["2026-04-28", "17:00", "22:00", "527"],
-        ["2026-04-29", "17:00", "22:00", "527"],
-      ]);
-
-      const SEEDED_MONTHS = {
-        "2026-03": { label: "Marzo 2026 busta paga", shifts: MARCH_2026_SHIFTS },
-        "2026-04": { label: "Aprile 2026 piano", shifts: APRIL_2026_SHIFTS },
-      };
-      const SEEDED_SHIFT_KEYS = new Set(
-        Object.values(SEEDED_MONTHS)
-          .flatMap((month) => month.shifts)
-          .map((shift) => `${shift.date}|${shift.startTime}|${shift.endTime}`),
-      );
       const DEFAULT_CALENDAR_SHIFTS = [];
 
       function isSeededTestShift(shift) {
-        return (
-          String(shift.id).startsWith("seed-") ||
-          SEEDED_SHIFT_KEYS.has(`${shift.date}|${shift.startTime}|${shift.endTime}`)
-        );
+        return String(shift.id).startsWith("seed-");
       }
 
       function readLocalState() {
@@ -539,7 +464,24 @@
 
           const completed = ranges.filter(({ end }) => end.getTime() <= nowMs);
           if (completed.length === 0) {
-            setAutoTrackSession(null);
+            const upcoming = ranges.find(({ start }) => start.getTime() > nowMs);
+            if (!upcoming) {
+              setAutoTrackSession(null);
+              return;
+            }
+            setAutoTrackSession((prev) =>
+              prev &&
+              prev.prefillDate === today &&
+              prev.startTime === upcoming.start.getTime() &&
+              prev.autoPrefilled
+                ? prev
+                : {
+                    startTime: upcoming.start.getTime(),
+                    autoEndTime: upcoming.end.getTime(),
+                    prefillDate: today,
+                    autoPrefilled: true,
+                  },
+            );
             return;
           }
 
@@ -989,22 +931,6 @@
             paysForParking,
           });
           setSettingsStatus("URL iCal rimosso da questo browser");
-        };
-
-        const loadSeededMonth = async (monthKey) => {
-          const seed = SEEDED_MONTHS[monthKey];
-          if (!seed) return;
-
-          const nextShifts = [
-            ...calendarShifts.filter((shift) => !shift.date.startsWith(monthKey)),
-            ...seed.shifts,
-          ].sort((a, b) => `${a.date} ${a.startTime}`.localeCompare(`${b.date} ${b.startTime}`));
-
-          setCalendarMonth(monthKey);
-          setCalendarDate(`${monthKey}-01`);
-          setCalendarShifts(nextShifts);
-          setEditingCalendarShiftId(null);
-          await saveState({ calendarShifts: nextShifts });
         };
 
         const updateCalendarMonth = (nextYear, nextMonth) => {
@@ -1774,17 +1700,6 @@
                                 ))}
                               </select>
                             </label>
-                          </div>
-                          <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
-                            {Object.entries(SEEDED_MONTHS).map(([monthKey, seed]) => (
-                              <button
-                                key={monthKey}
-                                onClick={() => loadSeededMonth(monthKey)}
-                                className="w-full rounded border border-white/10 px-3 py-3 text-[10px] font-black uppercase tracking-widest text-zinc-300 hover:text-white"
-                              >
-                                Carica turni {seed.label}
-                              </button>
-                            ))}
                           </div>
                           {calendarView === "plan" ? (
                             <>
