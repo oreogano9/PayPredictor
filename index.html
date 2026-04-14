@@ -263,8 +263,8 @@
           formatTimeInput(new Date(roundToHalfHour(new Date()).getTime() + 6 * 3600000)),
         );
         const [calendarShifts, setCalendarShifts] = useState([]);
-        const [calendarMonth, setCalendarMonth] = useState("2026-03");
-        const [calendarDate, setCalendarDate] = useState("2026-03-01");
+        const [calendarMonth, setCalendarMonth] = useState(() => formatMonthInput(new Date()));
+        const [calendarDate, setCalendarDate] = useState(() => formatDateInput(new Date()));
         const [calendarStartTime, setCalendarStartTime] = useState("08:00");
         const [calendarEndTime, setCalendarEndTime] = useState("14:00");
         const [editingCalendarShiftId, setEditingCalendarShiftId] = useState(null);
@@ -691,7 +691,7 @@
               (acc, shift) => {
                 const { start, end } = getShiftRange(shift.date, shift.startTime, shift.endTime);
                 const breakdown = calculateBreakdown(start.getTime(), end.getTime(), 0);
-                acc.total += breakdown.total;
+                acc.total += breakdown.total + breakdown.mealVoucher;
                 acc.displayHours += breakdown.elapsed / 3600000;
                 return acc;
               },
