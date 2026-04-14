@@ -1053,6 +1053,33 @@
 
           return mergeBreakdowns(prefill.aggregate, liveBreakdown);
         }, [activeTrackSession, calculateStoredDayPrefill, currentTime, weeklyStats.totalHours]);
+        const todaySavedBreakdown = useMemo(() => {
+          const today = formatDateInput(currentTime);
+          const todayShifts = allCalendarShifts
+            .filter((shift) => shift.date === today)
+            .sort((a, b) => a.startTime.localeCompare(b.startTime));
+          let aggregate = createEmptyBreakdown();
+          let paidHoursBefore = 0;
+
+          for (const shift of todayShifts) {
+            const { start, end } = getShiftRange(shift.date, shift.startTime, shift.endTime);
+            const breakdown = calculateBreakdown(
+              start.getTime(),
+              end.getTime(),
+              paidHoursBefore,
+              paidHoursBefore,
+            );
+            aggregate = mergeBreakdowns(aggregate, breakdown);
+            paidHoursBefore += breakdown.paidElapsed / 3600000;
+          }
+
+          return {
+            ...aggregate,
+            totalWithVoucher: aggregate.total + aggregate.mealVoucher,
+            shiftCount: todayShifts.length,
+            windows: todayShifts.map((shift) => `${shift.startTime}-${shift.endTime}`),
+          };
+        }, [allCalendarShifts, currentTime]);
         const activeAutoEndLabel = useMemo(() => {
           if (!activeTrackSession?.autoEndTime) return "";
           return new Date(activeTrackSession.autoEndTime).toLocaleTimeString("it-IT", {
@@ -2456,13 +2483,50 @@
                       Totale di oggi
                     </summary>
                     <div className="mt-3 text-2xl font-black text-white">
-                      EUR {currentBreakdown.total.toLocaleString("it-IT", {
+                      EUR {todaySavedBreakdown.totalWithVoucher.toLocaleString("it-IT", {
                         minimumFractionDigits: 2,
                         maximumFractionDigits: 2,
                       })}
                     </div>
                     <div className="mt-2 text-xs font-bold uppercase tracking-widest text-zinc-500">
-                      {(currentBreakdown.paidElapsed / 3600000).toFixed(2)}h pagate
+                      {(todaySavedBreakdown.paidElapsed / 3600000).toFixed(2)}h pagate
+                    </div>
+                    {todaySavedBreakdown.windows.length > 0 && (
+                      <div className="mt-3 text-xs font-bold uppercase tracking-widest text-zinc-400">
+                        {todaySavedBreakdown.windows.join(", ")}
+                      </div>
+                    )}
+                    <div className="mt-3 flex flex-wrap gap-2">
+                      {Object.entries(todaySavedBreakdown.payCodeTotals)
+                        .filter(([, hours]) => hours > 0)
+                        .map(([code, hours]) => (
+                          <span
+                            key={code}
+                            className="rounded border border-white/10 bg-white/[0.04] px-2 py-1 text-[9px] font-black uppercase tracking-tight text-zinc-300"
+                          >
+                            {getPayCode(code).label}: {hours.toFixed(2)}h
+                          </span>
+                        ))}
+                      {todaySavedBreakdown.nightWeekdayExtra > 0 && (
+                        <span className="rounded border border-white/10 bg-white/[0.04] px-2 py-1 text-[9px] font-black uppercase tracking-tight text-zinc-300">
+                          NTT: +EUR {todaySavedBreakdown.nightWeekdayExtra.toFixed(2)}
+                        </span>
+                      )}
+                      {todaySavedBreakdown.nightSundayHolidayExtra > 0 && (
+                        <span className="rounded border border-white/10 bg-white/[0.04] px-2 py-1 text-[9px] font-black uppercase tracking-tight text-zinc-300">
+                          NTD: +EUR {todaySavedBreakdown.nightSundayHolidayExtra.toFixed(2)}
+                        </span>
+                      )}
+                      {todaySavedBreakdown.mealVoucher > 0 && (
+                        <span className="rounded border border-white/10 bg-white/[0.04] px-2 py-1 text-[9px] font-black uppercase tracking-tight text-zinc-300">
+                          Buono pasto: EUR {todaySavedBreakdown.mealVoucher.toFixed(2)}
+                        </span>
+                      )}
+                      {todaySavedBreakdown.unpaidBreakMs > 0 && (
+                        <span className="rounded border border-red-400/15 bg-red-500/[0.06] px-2 py-1 text-[9px] font-black uppercase tracking-tight text-red-200/80">
+                          Pausa pranzo: -{todaySavedBreakdown.unpaidBreakMs / 60000} min
+                        </span>
+                      )}
                     </div>
                   </details>
                 </section>
