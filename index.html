@@ -108,9 +108,35 @@
       };
 
       const DEFAULT_CALENDAR_SHIFTS = [];
+      const SICK_LEAVE_KEYWORDS = [
+        "malattia",
+        "mutua",
+        "sick",
+        "sick leave",
+        "sick day",
+        "sick note",
+        "sickness",
+        "illness",
+        "medical leave",
+        "medical absence",
+        "off sick",
+        "out sick",
+        "in malattia",
+        "malato",
+        "malata",
+        "influenza",
+        "febbre",
+        "certificato medico",
+        "assenza malattia",
+        "assenza per malattia",
+      ];
 
       function isSeededTestShift(shift) {
         return String(shift.id).startsWith("seed-");
+      }
+
+      function isSickShift(shift) {
+        return shift?.kind === "sick";
       }
 
       function readLocalState() {
@@ -158,6 +184,12 @@
 
       function parseIcsDateValue(value) {
         if (!value) return null;
+        if (/^\d{8}$/.test(value)) {
+          const year = Number(value.slice(0, 4));
+          const month = Number(value.slice(4, 6)) - 1;
+          const day = Number(value.slice(6, 8));
+          return new Date(year, month, day, 0, 0, 0, 0);
+        }
         if (/^\d{8}T\d{6}Z$/.test(value)) {
           const year = Number(value.slice(0, 4));
           const month = Number(value.slice(4, 6)) - 1;
@@ -179,24 +211,81 @@
         return null;
       }
 
+      function getIcsField(eventText, fieldName) {
+        const match = eventText.match(new RegExp(`^${fieldName}(?:;[^:\\n]+)?:([^\\n\\r]+)`, "m"));
+        return match?.[1]?.trim() || "";
+      }
+
+      function decodeIcsText(value) {
+        return value
+          .replace(/\\n/gi, " ")
+          .replace(/\\,/g, ",")
+          .replace(/\\;/g, ";")
+          .replace(/\\\\/g, "\\")
+          .trim();
+      }
+
+      function isSickLeaveSummary(summary) {
+        const normalizedSummary = summary.toLocaleLowerCase("it-IT");
+        return SICK_LEAVE_KEYWORDS.some((keyword) => normalizedSummary.includes(keyword));
+      }
+
+      function enumerateIcsDates(start, end, isAllDay) {
+        if (!start) return [];
+        const dates = [];
+        const cursor = new Date(start.getFullYear(), start.getMonth(), start.getDate());
+        const final = end
+          ? new Date(end.getFullYear(), end.getMonth(), end.getDate())
+          : new Date(cursor);
+
+        if (!isAllDay && end && end.getTime() > final.getTime()) {
+          final.setDate(final.getDate() + 1);
+        }
+
+        while (cursor < final || dates.length === 0) {
+          dates.push(formatDateInput(cursor));
+          cursor.setDate(cursor.getDate() + 1);
+          if (dates.length > 366) break;
+        }
+
+        return dates;
+      }
+
       function parsePublicIcsToShifts(icsText) {
         const unfolded = unfoldIcsLines(icsText);
         const events = unfolded.split("BEGIN:VEVENT").slice(1);
         const shifts = [];
 
         events.forEach((eventText, index) => {
-          const dtStartLine = eventText.match(/^DTSTART(?:;[^:\n]+)?:([^\n\r]+)/m);
-          const dtEndLine = eventText.match(/^DTEND(?:;[^:\n]+)?:([^\n\r]+)/m);
+          const dtStartValue = getIcsField(eventText, "DTSTART");
+          const dtEndValue = getIcsField(eventText, "DTEND");
+          const summary = decodeIcsText(getIcsField(eventText, "SUMMARY"));
           const isAllDay = /DTSTART;VALUE=DATE/i.test(eventText) || /DTEND;VALUE=DATE/i.test(eventText);
+          const start = parseIcsDateValue(dtStartValue);
+          const end = parseIcsDateValue(dtEndValue);
+          const isSickLeave = isSickLeaveSummary(summary);
 
-          if (!dtStartLine || !dtEndLine || isAllDay) {
+          if (!dtStartValue || (!dtEndValue && !isSickLeave)) {
             return;
           }
 
-          const start = parseIcsDateValue(dtStartLine[1].trim());
-          const end = parseIcsDateValue(dtEndLine[1].trim());
+          if (isSickLeave) {
+            const sickDates = enumerateIcsDates(start, end, isAllDay);
+            sickDates.forEach((dateValue, sickIndex) => {
+              shifts.push({
+                id: `ical-sick-${dateValue}-${index}-${sickIndex}`,
+                date: dateValue,
+                startTime: "00:00",
+                endTime: "00:00",
+                source: "ical",
+                kind: "sick",
+                note: "Malattia",
+              });
+            });
+            return;
+          }
 
-          if (!start || !end || end <= start) {
+          if (isAllDay || !start || !end || end <= start) {
             return;
           }
 
@@ -429,8 +518,13 @@
             return;
           }
 
+          if (allCalendarShifts.some((shift) => shift.date === today && isSickShift(shift))) {
+            setAutoTrackSession(null);
+            return;
+          }
+
           const todayShifts = allCalendarShifts
-            .filter((shift) => shift.date === today)
+            .filter((shift) => shift.date === today && !isSickShift(shift))
             .sort((a, b) => a.startTime.localeCompare(b.startTime));
 
           if (todayShifts.length === 0) {
@@ -530,7 +624,7 @@
                 await saveState({ calendarShifts: localShiftsWithoutSeeds });
               }
               setImportedCalendarShifts(shifts);
-              setIcalSyncStatus(`Calendario importato: ${shifts.length} turni letti`);
+              setIcalSyncStatus(`Calendario importato: ${shifts.length} voci lette`);
             } catch (error) {
               console.error("Errore sync iCal", error);
               if (cancelled) return;
@@ -557,11 +651,15 @@
             ),
           [calendarShifts, importedCalendarShifts],
         );
+        const sickDateSet = useMemo(
+          () => new Set(allCalendarShifts.filter(isSickShift).map((shift) => shift.date)),
+          [allCalendarShifts],
+        );
 
         const calculateStoredDayPrefill = React.useCallback(
           (dateValue, cutoffMs, baseWeeklyHours = 0) => {
             const dayShifts = allCalendarShifts
-              .filter((shift) => shift.date === dateValue)
+              .filter((shift) => shift.date === dateValue && !isSickShift(shift) && !sickDateSet.has(shift.date))
               .sort((a, b) => a.startTime.localeCompare(b.startTime));
 
             let aggregate = createEmptyBreakdown();
@@ -584,7 +682,7 @@
 
             return { aggregate, paidHoursBefore };
           },
-          [allCalendarShifts],
+          [allCalendarShifts, sickDateSet],
         );
 
         const saveState = async (nextState) => {
@@ -945,7 +1043,8 @@
           const dayShifts = allCalendarShifts
             .filter((shift) => shift.date === dateValue)
             .sort((a, b) => a.startTime.localeCompare(b.startTime));
-          const editableShift = dayShifts.find((shift) => shift.source !== "ical");
+          const isSickDay = dayShifts.some(isSickShift);
+          const editableShift = isSickDay ? null : dayShifts.find((shift) => shift.source !== "ical");
 
           setCalendarDate(dateValue);
           setCalendarMonth(dateValue.slice(0, 7));
@@ -961,7 +1060,7 @@
             .filter((shift) => shift.date === calendarDate)
             .sort((a, b) => a.startTime.localeCompare(b.startTime));
 
-          if (dayShifts.length === 0) {
+          if (dayShifts.length === 0 || dayShifts.some(isSickShift)) {
             if (editingCalendarShiftId !== null) setEditingCalendarShiftId(null);
             setCalendarStartTime("08:00");
             setCalendarEndTime("14:00");
@@ -1056,7 +1155,7 @@
         const todaySavedBreakdown = useMemo(() => {
           const today = formatDateInput(currentTime);
           const todayShifts = allCalendarShifts
-            .filter((shift) => shift.date === today)
+            .filter((shift) => shift.date === today && !isSickShift(shift) && !sickDateSet.has(shift.date))
             .sort((a, b) => a.startTime.localeCompare(b.startTime));
           let aggregate = createEmptyBreakdown();
           let paidHoursBefore = 0;
@@ -1079,7 +1178,7 @@
             shiftCount: todayShifts.length,
             windows: todayShifts.map((shift) => `${shift.startTime}-${shift.endTime}`),
           };
-        }, [allCalendarShifts, currentTime]);
+        }, [allCalendarShifts, currentTime, sickDateSet]);
         const activeAutoEndLabel = useMemo(() => {
           if (!activeTrackSession?.autoEndTime) return "";
           return new Date(activeTrackSession.autoEndTime).toLocaleTimeString("it-IT", {
@@ -1094,9 +1193,9 @@
         const monthlyShifts = useMemo(
           () =>
             [...allCalendarShifts]
-              .filter((shift) => shift.date.startsWith(calendarMonth))
+              .filter((shift) => shift.date.startsWith(calendarMonth) && !isSickShift(shift) && !sickDateSet.has(shift.date))
               .sort((a, b) => `${a.date} ${a.startTime}`.localeCompare(`${b.date} ${b.startTime}`)),
-          [allCalendarShifts, calendarMonth],
+          [allCalendarShifts, calendarMonth, sickDateSet],
         );
         const calendarDays = useMemo(() => {
           const [year, month] = calendarMonth.split("-").map(Number);
@@ -1112,8 +1211,12 @@
             const shifts = allCalendarShifts
               .filter((shift) => shift.date === dateValue)
               .sort((a, b) => a.startTime.localeCompare(b.startTime));
+            const sickShifts = shifts.filter(isSickShift);
+            const isSick = sickShifts.length > 0;
+            const visibleShifts = isSick ? sickShifts : shifts;
             const summary = shifts.reduce(
               (acc, shift) => {
+                if (isSick || isSickShift(shift)) return acc;
                 const { start, end } = getShiftRange(shift.date, shift.startTime, shift.endTime);
                 const breakdown = calculateBreakdown(start.getTime(), end.getTime(), 0);
                 acc.total += breakdown.total + breakdown.mealVoucher;
@@ -1132,10 +1235,11 @@
               date,
               dateValue,
               inMonth: dateValue.startsWith(calendarMonth),
-              shifts,
+              shifts: visibleShifts,
               total: summary.total,
               displayHours: summary.displayHours,
               hasNightShift: summary.hasNightShift,
+              isSick,
             };
           });
         }, [allCalendarShifts, calendarMonth]);
@@ -1243,7 +1347,7 @@
           }, {});
           let runningPay = 0;
           const points = calendarDays
-            .filter((day) => day.inMonth && day.shifts.length > 0)
+            .filter((day) => day.inMonth && day.shifts.length > 0 && !day.isSick)
             .map((day) => {
               const dayBreakdowns = breakdownsByDate[day.dateValue] || [];
               const windowStart = day.shifts[0]?.startTime || null;
@@ -1289,23 +1393,27 @@
         const hoveredGraphPoint =
           monthlyGraphData.points.find((point) => point.key === hoveredGraphPointKey) || monthlyGraphData.points[monthlyGraphData.points.length - 1] || null;
         const currentCalendarMonthLabel = `${MONTH_OPTIONS[Number(calendarMonth.slice(5, 7)) - 1]} ${calendarMonth.slice(0, 4)}`;
+        const selectedCalendarDayIsSick = sickDateSet.has(calendarDate);
         const maxCalendarDayTotal = useMemo(
           () =>
             calendarDays.reduce(
-              (max, day) => (day.inMonth && day.shifts.length > 0 ? Math.max(max, day.total) : max),
+              (max, day) => (day.inMonth && day.shifts.length > 0 && !day.isSick ? Math.max(max, day.total) : max),
               0,
             ),
           [calendarDays],
         );
         const minCalendarDayTotal = useMemo(() => {
           const workedDayTotals = calendarDays
-            .filter((day) => day.inMonth && day.shifts.length > 0)
+            .filter((day) => day.inMonth && day.shifts.length > 0 && !day.isSick)
             .map((day) => day.total);
           return workedDayTotals.length > 0 ? Math.min(...workedDayTotals) : 0;
         }, [calendarDays]);
-        const getCalendarCardClasses = (isSelected, hasShift) => {
+        const getCalendarCardClasses = (isSelected, hasShift, isSick) => {
           if (isSelected) {
             return "border-orange-400 bg-orange-400/10 shadow-[0_0_0_1px_rgba(251,146,60,0.1)] hover:border-orange-300/70";
+          }
+          if (isSick) {
+            return "border-rose-300/25 bg-rose-500/[0.06] hover:border-rose-200/40";
           }
           if (!hasShift) {
             return "border-white/5 bg-white/[0.015] hover:border-white/10";
@@ -1491,7 +1599,7 @@
                     </div>
                   </div>
                   <p className="mt-3 text-xs text-zinc-500">
-                    Incolla qui l&apos;indirizzo pubblico iCal. All&apos;avvio la pagina prova a leggere gli eventi orari, ignorando gli eventi tutto il giorno e ignorando titolo e descrizione.
+                    Incolla qui l&apos;indirizzo pubblico iCal. All&apos;avvio legge gli eventi orari e usa il titolo solo per riconoscere la malattia. Gli altri eventi tutto il giorno vengono ignorati.
                   </p>
                   <div className="mt-4 flex flex-wrap gap-2">
                     <button
@@ -1735,12 +1843,13 @@
                                   const isSelected = day.dateValue === calendarDate;
                                   const hasShift = day.shifts.length > 0;
                                   const hasNightShift = day.hasNightShift;
+                                  const isSick = day.isSick;
                                   const startsWeek = day.date.getDay() === 1 && index > 0;
                                   return (
                                     <button
                                       key={day.dateValue}
                                       onClick={() => selectCalendarDay(day.dateValue)}
-                                      className={`w-full rounded border p-3 text-left align-top transition ${getCalendarCardClasses(isSelected, hasShift)} ${startsWeek ? "mt-4" : ""}`}
+                                      className={`w-full rounded border p-3 text-left align-top transition ${getCalendarCardClasses(isSelected, hasShift, isSick)} ${startsWeek ? "mt-4" : ""}`}
                                     >
                                       <div className="flex items-start justify-between gap-3">
                                         <div>
@@ -1752,7 +1861,19 @@
                                             })}
                                           </div>
                                           <div className="text-[10px] font-bold uppercase tracking-widest text-zinc-500 mt-1 flex items-center gap-1">
-                                            {hasShift ? (
+                                            {isSick ? (
+                                              <>
+                                                <span
+                                                  aria-hidden="true"
+                                                  className="inline-flex h-4 w-4 items-center justify-center rounded border border-rose-300/35 bg-rose-500/10 text-rose-100"
+                                                >
+                                                  <svg width="10" height="10" viewBox="0 0 12 12" fill="none">
+                                                    <path d="M6 2v8M2 6h8" stroke="currentColor" strokeWidth="2" strokeLinecap="round" />
+                                                  </svg>
+                                                </span>
+                                                <span className="text-rose-200">Malattia</span>
+                                              </>
+                                            ) : hasShift ? (
                                               <>
                                                 {hasNightShift && (
                                                   <span
@@ -1775,7 +1896,7 @@
                                             )}
                                           </div>
                                         </div>
-                                        {hasShift && (
+                                        {hasShift && !isSick && (
                                           <div className="text-right">
                                             <div className="mb-1 flex justify-end">
                                               <span className="h-1.5 w-8 rounded-full" style={getPayMarkerStyle(day.total)}></span>
@@ -1789,7 +1910,11 @@
                                           </div>
                                         )}
                                       </div>
-                                      {hasShift && (
+                                      {isSick ? (
+                                        <div className="mt-3 text-[11px] font-bold text-rose-100/80">
+                                          Placeholder: 0h / EUR 0.00 finche non definiamo la regola busta paga.
+                                        </div>
+                                      ) : hasShift && (
                                         <div className="mt-3 space-y-1">
                                           {day.shifts.map((shift) => (
                                             <div key={shift.id} className="text-[11px] font-bold text-zinc-300">
@@ -1817,15 +1942,25 @@
                                 const isSelected = day.dateValue === calendarDate;
                                 const hasShift = day.shifts.length > 0;
                                 const hasNightShift = day.hasNightShift;
+                                const isSick = day.isSick;
                                 return (
                                   <button
                                     key={day.dateValue}
                                     onClick={() => selectCalendarDay(day.dateValue)}
-                                    className={`min-h-24 rounded border p-2 text-left align-top transition ${getCalendarCardClasses(isSelected, hasShift)} ${day.inMonth ? "opacity-100" : "opacity-35"}`}
+                                    className={`min-h-24 rounded border p-2 text-left align-top transition ${getCalendarCardClasses(isSelected, hasShift, isSick)} ${day.inMonth ? "opacity-100" : "opacity-35"}`}
                                   >
                                     <div className="flex items-start justify-between gap-1">
                                       <span className="text-sm font-black text-white">{day.date.getDate()}</span>
-                                      {hasShift && (
+                                      {isSick ? (
+                                        <span
+                                          aria-hidden="true"
+                                          className="inline-flex h-4 w-4 items-center justify-center rounded border border-rose-300/35 bg-rose-500/10 text-rose-100"
+                                        >
+                                          <svg width="10" height="10" viewBox="0 0 12 12" fill="none">
+                                            <path d="M6 2v8M2 6h8" stroke="currentColor" strokeWidth="2" strokeLinecap="round" />
+                                          </svg>
+                                        </span>
+                                      ) : hasShift && (
                                         <span className="flex items-center gap-1">
                                           {hasNightShift && (
                                             <span
@@ -1845,7 +1980,11 @@
                                         </span>
                                       )}
                                     </div>
-                                    {hasShift && (
+                                    {isSick ? (
+                                      <div className="mt-3 text-[10px] font-black uppercase tracking-tight text-rose-100/85">
+                                        Malattia
+                                      </div>
+                                    ) : hasShift && (
                                       <div className="mt-2 space-y-1">
                                         <div className="flex justify-end">
                                           <span className="h-1 w-6 rounded-full" style={getPayMarkerStyle(day.total)}></span>
@@ -1914,10 +2053,24 @@
 
                           <button
                             onClick={saveCalendarShift}
-                            className="w-full bg-white text-black py-4 rounded text-sm font-extrabold hover:bg-yellow-400 transition-all active:scale-[0.99] uppercase tracking-widest"
+                            disabled={selectedCalendarDayIsSick}
+                            className={`w-full py-4 rounded text-sm font-extrabold transition-all active:scale-[0.99] uppercase tracking-widest ${
+                              selectedCalendarDayIsSick
+                                ? "cursor-not-allowed border border-rose-300/20 bg-rose-500/10 text-rose-100/70"
+                                : "bg-white text-black hover:bg-yellow-400"
+                            }`}
                           >
-                            {editingCalendarShiftId ? "Aggiorna turno" : "Aggiungi turno locale"}
+                            {selectedCalendarDayIsSick
+                              ? "Giorno segnato come malattia"
+                              : editingCalendarShiftId
+                                ? "Aggiorna turno"
+                                : "Aggiungi turno locale"}
                           </button>
+                          {selectedCalendarDayIsSick && (
+                            <p className="text-left text-xs font-bold text-rose-100/70">
+                              Questo giorno e importato da iCal come malattia: per ora sovrascrive i turni e vale 0h / EUR 0.00.
+                            </p>
+                          )}
 
                           <div className="bg-black/30 border border-white/10 rounded p-4 text-left">
                             <div className="flex items-start justify-between gap-4 mb-4">
