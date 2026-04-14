@@ -561,7 +561,7 @@
 
             setIcalSyncStatus("Sincronizzazione calendario in corso...");
             try {
-              const response = await fetch(nextUrl);
+              const response = await fetch(`/api/ical?url=${encodeURIComponent(nextUrl)}`);
               if (!response.ok) {
                 throw new Error(`HTTP ${response.status}`);
               }
@@ -574,7 +574,7 @@
               console.error("Errore sync iCal", error);
               if (cancelled) return;
               setImportedCalendarShifts([]);
-              setIcalSyncStatus("Impossibile leggere l'iCal da browser. Probabile limite CORS.");
+              setIcalSyncStatus("Impossibile leggere l'iCal tramite proxy.");
             }
           };
 
