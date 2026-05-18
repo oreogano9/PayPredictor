@@ -407,6 +407,8 @@
       const roundCurrency = (amount) => Math.round((amount + Number.EPSILON) * 100) / 100;
       const formatEuro = (amount) =>
         `EUR ${amount.toLocaleString("it-IT", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
+      const getTotalNightHours = (breakdownLike) =>
+        (breakdownLike.nightWeekdayHours || 0) + (breakdownLike.nightSundayHolidayHours || 0);
 
       function App() {
         const [user, setUser] = useState(null);
@@ -1124,6 +1126,7 @@
             ["After parking", formatEuro(monthlyPrediction.incomeAfterParking)],
             ["Payroll gross", formatEuro(monthlyPrediction.payslipNetEstimate.grossPayroll)],
             ["Food vouchers", formatEuro(monthlyPrediction.foodVouchers)],
+            ["Ore notturne", `${getTotalNightHours(monthlyPrediction).toFixed(2)} h`],
             ...Object.entries(monthlyPrediction.payCodeTotals)
               .filter(([, hours]) => hours > 0)
               .map(([code, hours]) => [getPayCode(code).label, `${hours.toFixed(2)} h`]),
@@ -2144,7 +2147,7 @@
                                 {(monthlyPrediction.paidElapsed / 3600000).toFixed(1)} h pagate
                               </div>
                             </div>
-                            <div className="grid grid-cols-1 sm:grid-cols-5 gap-3 mb-4">
+                            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-6 gap-3 mb-4">
                               <div className="bg-white/5 rounded p-3">
                                 <p className="text-[9px] font-black uppercase tracking-widest text-zinc-500 mb-1">
                                   Guadagno turni
@@ -2183,6 +2186,14 @@
                                 </p>
                                 <p className="text-sm font-black text-emerald-100">
                                   EUR {monthlyPrediction.foodVouchers.toFixed(2)}
+                                </p>
+                              </div>
+                              <div className="bg-violet-500/10 rounded p-3">
+                                <p className="text-[9px] font-black uppercase tracking-widest text-violet-200 mb-1">
+                                  Ore notturne
+                                </p>
+                                <p className="text-sm font-black text-violet-100">
+                                  {getTotalNightHours(monthlyPrediction).toFixed(2)}h
                                 </p>
                               </div>
                             </div>
