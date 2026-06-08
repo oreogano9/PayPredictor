@@ -265,6 +265,345 @@
         return dates;
       }
 
+      const IMPORT_MONTH_LOOKUP = {
+        jan: 0,
+        january: 0,
+        gen: 0,
+        gennaio: 0,
+        feb: 1,
+        february: 1,
+        febbraio: 1,
+        mar: 2,
+        march: 2,
+        marzo: 2,
+        apr: 3,
+        april: 3,
+        aprile: 3,
+        may: 4,
+        maggio: 4,
+        jun: 5,
+        june: 5,
+        giugno: 5,
+        giu: 5,
+        jul: 6,
+        july: 6,
+        luglio: 6,
+        lug: 6,
+        aug: 7,
+        august: 7,
+        agosto: 7,
+        ago: 7,
+        sep: 8,
+        sept: 8,
+        september: 8,
+        settembre: 8,
+        set: 8,
+        oct: 9,
+        october: 9,
+        ottobre: 9,
+        ott: 9,
+        nov: 10,
+        november: 10,
+        novembre: 10,
+        dec: 11,
+        december: 11,
+        dicembre: 11,
+        dic: 11,
+      };
+
+      function formatImportTime(decimalHours) {
+        const totalMinutes = Math.round(decimalHours * 60);
+        const hours = Math.floor(totalMinutes / 60) % 24;
+        const minutes = totalMinutes % 60;
+        return `${String(hours).padStart(2, "0")}:${String(minutes).padStart(2, "0")}`;
+      }
+
+      function decodeShiftCode(code) {
+        const duration = Number(code[0]);
+        const slotIndex = Number(code.slice(1));
+        const startHour = (4 + Math.floor((slotIndex - 1) / 2)) % 24;
+        const startMinutes = ((slotIndex - 1) % 2) * 30;
+        const startDecimal = startHour + startMinutes / 60;
+        const endDecimal = (startDecimal + duration) % 24;
+        return {
+          duration,
+          startTime: formatImportTime(startDecimal),
+          endTime: formatImportTime(endDecimal),
+        };
+      }
+
+      function normalizeImportLine(line) {
+        return line
+          .replace(/[–—]/g, "-")
+          .replace(/\s+/g, " ")
+          .trim();
+      }
+
+      function parseImportDate(line, fallbackYear) {
+        const numericMatch = line.match(/\b(\d{1,2})[\/\-\.](\d{1,2})(?:[\/\-\.](\d{2,4}))?\b/);
+        if (numericMatch) {
+          const day = Number(numericMatch[1]);
+          const month = Number(numericMatch[2]) - 1;
+          const yearValue = numericMatch[3]
+            ? Number(numericMatch[3].length === 2 ? `20${numericMatch[3]}` : numericMatch[3])
+            : fallbackYear;
+          return {
+            date: new Date(yearValue, month, day),
+            matchedText: numericMatch[0],
+          };
+        }
+
+        const textMatch = line.match(
+          /\b(\d{1,2})\s+([A-Za-zÀ-ÿ]+)(?:\s+(\d{2,4}))?\b|\b([A-Za-zÀ-ÿ]+)\s+(\d{1,2})(?:\s+(\d{2,4}))?\b/i,
+        );
+        if (!textMatch) return null;
+
+        const monthToken = (textMatch[2] || textMatch[4] || "").toLowerCase();
+        const month = IMPORT_MONTH_LOOKUP[monthToken];
+        if (month === undefined) return null;
+        const day = Number(textMatch[1] || textMatch[5]);
+        const yearToken = textMatch[3] || textMatch[6];
+        const yearValue = yearToken
+          ? Number(yearToken.length === 2 ? `20${yearToken}` : yearToken)
+          : fallbackYear;
+
+        return {
+          date: new Date(yearValue, month, day),
+          matchedText: textMatch[0],
+        };
+      }
+
+      function parseImportedLine(line, fallbackYear) {
+        const normalizedLine = normalizeImportLine(line);
+        if (!normalizedLine) return null;
+
+        const dateInfo = parseImportDate(normalizedLine, fallbackYear);
+        if (!dateInfo || Number.isNaN(dateInfo.date.getTime())) return null;
+
+        const lineWithoutDate = normalizedLine.replace(dateInfo.matchedText, "").trim();
+        const lowerTail = lineWithoutDate.toLocaleLowerCase("it-IT");
+        const freeMatch = lineWithoutDate.match(/\b(RIP|FNL|FR|FERIE|RIPOSO|MALATTIA|MUTUA|SICK|SICK LEAVE|SICK DAY)\b/i);
+        const codeMatch = lineWithoutDate.match(/\b([4-8](?:0[1-9]|[1-3][0-9]|4[0-8]))\b/);
+        const timeMatch = lineWithoutDate.match(/\b(\d{1,2})[:\.](\d{2})\s*(?:-|to)\s*(\d{1,2})[:\.](\d{2})\b/i);
+
+        if (freeMatch) {
+          const token = freeMatch[1].toUpperCase();
+          if (isSickLeaveSummary(lineWithoutDate)) {
+            return {
+              kind: "sick",
+              date: formatDateInput(dateInfo.date),
+              allDay: true,
+              summary: "Malattia",
+              note: "Malattia",
+            };
+          }
+
+          const summary =
+            token === "RIP" || token === "RIPOSO"
+              ? "Riposo"
+              : token === "FR" || token === "FERIE"
+                ? "Ferie"
+                : "Da definire";
+          return {
+            kind: "free",
+            date: formatDateInput(dateInfo.date),
+            allDay: true,
+            summary,
+            note: summary,
+          };
+        }
+
+        if (codeMatch) {
+          const code = codeMatch[1];
+          const decoded = decodeShiftCode(code);
+          return {
+            kind: "work",
+            date: formatDateInput(dateInfo.date),
+            startTime: decoded.startTime,
+            endTime: decoded.endTime,
+            allDay: false,
+            summary: `Turno ${code}`,
+            note: code,
+          };
+        }
+
+        if (timeMatch) {
+          const startTime = `${String(Number(timeMatch[1])).padStart(2, "0")}:${timeMatch[2]}`;
+          const endTime = `${String(Number(timeMatch[3])).padStart(2, "0")}:${timeMatch[4]}`;
+          return {
+            kind: "work",
+            date: formatDateInput(dateInfo.date),
+            startTime,
+            endTime,
+            allDay: false,
+            summary: "Turno lavoro",
+            note: lowerTail.replace(timeMatch[0].toLowerCase(), "").trim() || "Orario esplicito",
+          };
+        }
+
+        return null;
+      }
+
+      function expandImportedLines(text, fallbackYear) {
+        const lines = text.split("\n");
+        const expanded = [];
+        let lastDate = null;
+
+        for (const rawLine of lines) {
+          const normalizedLine = normalizeImportLine(rawLine);
+          if (!normalizedLine) {
+            expanded.push(rawLine);
+            continue;
+          }
+
+          const parsed = parseImportedLine(normalizedLine, fallbackYear);
+          if (parsed?.date) {
+            const currentDate = new Date(`${parsed.date}T00:00:00`);
+            if (lastDate) {
+              const diffDays = Math.round((currentDate.getTime() - lastDate.getTime()) / 86400000);
+              if (diffDays > 1 && diffDays <= 20) {
+                for (let i = 1; i < diffDays; i += 1) {
+                  const missingDate = new Date(lastDate);
+                  missingDate.setDate(missingDate.getDate() + i);
+                  expanded.push(`${formatDateInput(missingDate)} RIP`);
+                }
+              }
+            }
+            lastDate = currentDate;
+          }
+
+          expanded.push(rawLine);
+        }
+
+        return expanded;
+      }
+
+      function parseImportedTextToEvents(text, fallbackYear) {
+        return expandImportedLines(text, fallbackYear)
+          .map((line, index) => {
+            const parsed = parseImportedLine(line, fallbackYear);
+            if (!parsed) return null;
+            return {
+              id: `extracted-${parsed.date}-${index}`,
+              ...parsed,
+            };
+          })
+          .filter(Boolean);
+      }
+
+      function extractedEventsToCalendarShifts(events) {
+        return events
+          .filter((event) => event.kind === "work" || event.kind === "sick")
+          .map((event) =>
+            event.kind === "sick"
+              ? {
+                  id: event.id,
+                  date: event.date,
+                  startTime: "00:00",
+                  endTime: "00:00",
+                  source: "local-extracted",
+                  kind: "sick",
+                  note: "Malattia",
+                }
+              : {
+                  id: event.id,
+                  date: event.date,
+                  startTime: event.startTime,
+                  endTime: event.endTime,
+                  source: "local-extracted",
+                  note: event.note,
+                },
+          );
+      }
+
+      function buildGoogleCalendarCsv(events) {
+        const rows = [["Subject", "Start Date", "Start Time", "End Date", "End Time", "All Day Event", "Description"]];
+        const csvDate = (dateValue) => {
+          const date = new Date(`${dateValue}T00:00:00`);
+          return `${String(date.getMonth() + 1).padStart(2, "0")}/${String(date.getDate()).padStart(2, "0")}/${date.getFullYear()}`;
+        };
+
+        events.forEach((event) => {
+          if (event.allDay) {
+            rows.push([event.summary, csvDate(event.date), "", csvDate(event.date), "", "True", event.note || ""]);
+            return;
+          }
+
+          const { start, end } = getShiftRange(event.date, event.startTime, event.endTime);
+          rows.push([
+            event.summary,
+            csvDate(event.date),
+            event.startTime,
+            csvDate(formatDateInput(end)),
+            event.endTime,
+            "False",
+            event.note || "",
+          ]);
+        });
+
+        return rows
+          .map((row) =>
+            row
+              .map((value) => `"${String(value ?? "").replace(/"/g, '""')}"`)
+              .join(","),
+          )
+          .join("\n");
+      }
+
+      async function ensurePdfJs() {
+        if (window.pdfjsLib) return window.pdfjsLib;
+        await new Promise((resolve, reject) => {
+          const script = document.createElement("script");
+          script.src = "https://cdnjs.cloudflare.com/ajax/libs/pdf.js/2.16.105/pdf.min.js";
+          script.onload = resolve;
+          script.onerror = reject;
+          document.head.appendChild(script);
+        });
+        window.pdfjsLib.GlobalWorkerOptions.workerSrc =
+          "https://cdnjs.cloudflare.com/ajax/libs/pdf.js/2.16.105/pdf.worker.min.js";
+        return window.pdfjsLib;
+      }
+
+      async function extractPdfLines(file) {
+        const pdfjsLib = await ensurePdfJs();
+        const pdf = await pdfjsLib.getDocument({ data: await file.arrayBuffer() }).promise;
+        const pages = [];
+
+        for (let pageNumber = 1; pageNumber <= pdf.numPages; pageNumber += 1) {
+          const page = await pdf.getPage(pageNumber);
+          const textContent = await page.getTextContent();
+          const lines = [];
+
+          textContent.items.forEach((item) => {
+            const x = item.transform[4];
+            const y = item.transform[5];
+            const text = normalizeImportLine(item.str);
+            if (!text) return;
+
+            let line = lines.find((entry) => Math.abs(entry.y - y) < 2.5);
+            if (!line) {
+              line = { y, parts: [] };
+              lines.push(line);
+            }
+            line.parts.push({ x, text });
+          });
+
+          lines
+            .sort((left, right) => right.y - left.y)
+            .forEach((line) => {
+              const joined = line.parts
+                .sort((left, right) => left.x - right.x)
+                .map((part) => part.text)
+                .join(" ")
+                .replace(/\s+/g, " ")
+                .trim();
+              if (joined) pages.push(joined);
+            });
+        }
+
+        return pages.join("\n");
+      }
+
       function parsePublicIcsToShifts(icsText) {
         const unfolded = unfoldIcsLines(icsText);
         const events = unfolded.split("BEGIN:VEVENT").slice(1);
@@ -431,6 +770,11 @@
         const [calendarGraphMode, setCalendarGraphMode] = useState("both");
         const [calendarPayLineMode, setCalendarPayLineMode] = useState("daily");
         const [hoveredGraphPointKey, setHoveredGraphPointKey] = useState(null);
+        const [importPanelOpen, setImportPanelOpen] = useState(false);
+        const [importText, setImportText] = useState("");
+        const [importedEventsPreview, setImportedEventsPreview] = useState([]);
+        const [importStatus, setImportStatus] = useState("");
+        const [isImportingFile, setIsImportingFile] = useState(false);
         const [copyMonthStatus, setCopyMonthStatus] = useState("");
         const [settingsOpen, setSettingsOpen] = useState(false);
         const [googleCalendarIcsUrl, setGoogleCalendarIcsUrl] = useState(() => readLocalSettings().googleCalendarIcsUrl || "");
@@ -440,6 +784,7 @@
         const [currentTime, setCurrentTime] = useState(new Date());
         const autoEndingRef = useRef(false);
         const cleanedSeedShiftsRef = useRef(false);
+        const pdfImportInputRef = useRef(null);
         const [loading, setLoading] = useState(true);
         const [services, setServices] = useState(null);
         const isLocalMode = !firebaseConfig;
@@ -646,13 +991,21 @@
         }, [calendarShifts, googleCalendarIcsUrl]);
 
         const allCalendarShifts = useMemo(
-          () =>
-            (importedCalendarShifts.length > 0
-              ? importedCalendarShifts
-              : calendarShifts.filter((shift) => !isSeededTestShift(shift))
-            ).sort((a, b) =>
+          () => {
+            const deduped = new Map();
+            [...calendarShifts.filter((shift) => !isSeededTestShift(shift)), ...importedCalendarShifts].forEach((shift) => {
+              const key = [
+                shift.kind || "work",
+                shift.date,
+                shift.startTime,
+                shift.endTime,
+              ].join("|");
+              deduped.set(key, shift);
+            });
+            return [...deduped.values()].sort((a, b) =>
               `${a.date} ${a.startTime}`.localeCompare(`${b.date} ${b.startTime}`),
-            ),
+            );
+          },
           [calendarShifts, importedCalendarShifts],
         );
         const sickDateSet = useMemo(
@@ -1026,6 +1379,72 @@
             paysForParking,
           });
           setSettingsStatus("URL iCal rimosso da questo browser");
+        };
+
+        const parseImportPreview = React.useCallback(
+          (nextText) => {
+            const parsedEvents = parseImportedTextToEvents(nextText, new Date().getFullYear());
+            setImportedEventsPreview(parsedEvents);
+            setImportStatus(
+              parsedEvents.length > 0
+                ? `${parsedEvents.filter((event) => event.kind === "work").length} turni, ${parsedEvents.filter((event) => event.kind === "sick").length} malattie, ${parsedEvents.filter((event) => event.kind === "free").length} giorni liberi`
+                : "Nessun turno trovato",
+            );
+            return parsedEvents;
+          },
+          [],
+        );
+
+        const handleImportTextChange = (nextText) => {
+          setImportText(nextText);
+          if (!nextText.trim()) {
+            setImportedEventsPreview([]);
+            setImportStatus("");
+            return;
+          }
+          parseImportPreview(nextText);
+        };
+
+        const handlePdfImport = async (event) => {
+          const file = event.target.files?.[0];
+          if (!file) return;
+          setIsImportingFile(true);
+          setImportStatus("");
+          try {
+            const extractedText = await extractPdfLines(file);
+            setImportText(extractedText);
+            parseImportPreview(extractedText);
+            setImportPanelOpen(true);
+          } catch (error) {
+            console.error("Errore import PDF", error);
+            setImportStatus("Import PDF non riuscito");
+          } finally {
+            setIsImportingFile(false);
+            event.target.value = "";
+          }
+        };
+
+        const applyImportedEventsToCalendar = async () => {
+          if (!user || importedEventsPreview.length === 0) return;
+          const nextShifts = extractedEventsToCalendarShifts(importedEventsPreview);
+          setCalendarShifts(nextShifts);
+          await saveState({ calendarShifts: nextShifts });
+          if (nextShifts[0]) {
+            setCalendarMonth(nextShifts[0].date.slice(0, 7));
+            setCalendarDate(nextShifts[0].date);
+          }
+          setImportStatus("Dati applicati al calendario locale");
+        };
+
+        const exportImportedEventsToGoogleCsv = () => {
+          if (importedEventsPreview.length === 0) return;
+          const blob = new Blob([buildGoogleCalendarCsv(importedEventsPreview)], { type: "text/csv;charset=utf-8" });
+          const link = document.createElement("a");
+          link.href = URL.createObjectURL(blob);
+          link.download = "google-calendar-turni.csv";
+          link.click();
+          URL.revokeObjectURL(link.href);
+          setImportStatus("CSV Google Calendar scaricato");
         };
 
         const updateCalendarMonth = (nextYear, nextMonth) => {
@@ -1725,6 +2144,106 @@
                         </div>
                       ) : (
                         <div className="space-y-4">
+                          <div className="rounded border border-white/10 bg-black/30 p-4 text-left">
+                            <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+                              <div>
+                                <p className="text-[10px] font-black uppercase tracking-widest text-zinc-500">
+                                  Importa turni
+                                </p>
+                                <div className="mt-1 text-sm font-bold text-white">PDF o testo</div>
+                              </div>
+                              <div className="flex flex-wrap gap-2">
+                                <input
+                                  ref={pdfImportInputRef}
+                                  type="file"
+                                  accept="application/pdf"
+                                  onChange={handlePdfImport}
+                                  className="hidden"
+                                />
+                                <button
+                                  onClick={() => pdfImportInputRef.current?.click()}
+                                  className="rounded border border-white/10 px-3 py-3 text-[10px] font-black uppercase tracking-widest text-zinc-300 hover:text-white"
+                                >
+                                  {isImportingFile ? "Importazione..." : "Importa PDF"}
+                                </button>
+                                <button
+                                  onClick={() => setImportPanelOpen((prev) => !prev)}
+                                  className={`rounded border px-3 py-3 text-[10px] font-black uppercase tracking-widest transition ${
+                                    importPanelOpen
+                                      ? "border-orange-400 bg-orange-400/10 text-orange-200"
+                                      : "border-white/10 text-zinc-300 hover:text-white"
+                                  }`}
+                                >
+                                  Incolla testo
+                                </button>
+                                <button
+                                  onClick={applyImportedEventsToCalendar}
+                                  disabled={importedEventsPreview.length === 0}
+                                  className={`rounded border px-3 py-3 text-[10px] font-black uppercase tracking-widest transition ${
+                                    importedEventsPreview.length === 0
+                                      ? "cursor-not-allowed border-white/10 text-zinc-600"
+                                      : "border-white/10 text-zinc-300 hover:text-white"
+                                  }`}
+                                >
+                                  Usa nel calendario
+                                </button>
+                                <button
+                                  onClick={exportImportedEventsToGoogleCsv}
+                                  disabled={importedEventsPreview.length === 0}
+                                  className={`rounded border px-3 py-3 text-[10px] font-black uppercase tracking-widest transition ${
+                                    importedEventsPreview.length === 0
+                                      ? "cursor-not-allowed border-white/10 text-zinc-600"
+                                      : "border-white/10 text-zinc-300 hover:text-white"
+                                  }`}
+                                >
+                                  CSV Google
+                                </button>
+                                <a
+                                  href="https://calendar.google.com/calendar/u/0/r/settings/export"
+                                  target="_blank"
+                                  rel="noreferrer"
+                                  className="rounded border border-white/10 px-3 py-3 text-[10px] font-black uppercase tracking-widest text-zinc-300 hover:text-white"
+                                >
+                                  Apri Google Calendar
+                                </a>
+                              </div>
+                            </div>
+                            {(importPanelOpen || importStatus || importedEventsPreview.length > 0) && (
+                              <div className="mt-4 space-y-3">
+                                {importPanelOpen && (
+                                  <textarea
+                                    value={importText}
+                                    onChange={(event) => handleImportTextChange(event.target.value)}
+                                    placeholder="Incolla qui testo o estratto PDF"
+                                    className="h-40 w-full resize-none rounded border border-white/10 bg-black/40 px-3 py-3 text-xs font-mono text-white"
+                                  />
+                                )}
+                                {importStatus && (
+                                  <p className="text-[10px] font-black uppercase tracking-widest text-zinc-400">
+                                    {importStatus}
+                                  </p>
+                                )}
+                                {importedEventsPreview.length > 0 && (
+                                  <div className="flex flex-wrap gap-2">
+                                    {importedEventsPreview.slice(0, 8).map((event) => (
+                                      <span
+                                        key={event.id}
+                                        className="rounded border border-white/10 bg-white/[0.04] px-2 py-1 text-[10px] font-black uppercase tracking-tight text-zinc-300"
+                                      >
+                                        {event.date}{" "}
+                                        {event.allDay ? event.summary : `${event.startTime}-${event.endTime}`}
+                                      </span>
+                                    ))}
+                                    {importedEventsPreview.length > 8 && (
+                                      <span className="rounded border border-white/10 bg-white/[0.04] px-2 py-1 text-[10px] font-black uppercase tracking-tight text-zinc-500">
+                                        +{importedEventsPreview.length - 8}
+                                      </span>
+                                    )}
+                                  </div>
+                                )}
+                              </div>
+                            )}
+                          </div>
                           <div className="grid grid-cols-2 gap-2">
                             <button
                               onClick={() => setCalendarView("plan")}
@@ -2152,7 +2671,11 @@
                                         </div>
                                       )}
                                       <div className="text-[10px] font-bold uppercase tracking-widest text-zinc-500">
-                                        {isSickShift(shift) ? "Conteggio malattia" : "Importato da iCal"}
+                                        {isSickShift(shift)
+                                          ? "Conteggio malattia"
+                                          : shift.source === "local-extracted"
+                                            ? "Importato da PDF o testo"
+                                            : "Importato da iCal"}
                                       </div>
                                       <div className="text-[10px] font-bold uppercase tracking-widest text-zinc-500">
                                         EUR {totalWithVoucher.toFixed(2)} stima
