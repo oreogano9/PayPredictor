@@ -340,7 +340,43 @@
       }
 
       function parseImportDate(line, fallbackYear) {
-        const numericMatch = line.match(/\b(\d{1,2})[\/\-\.](\d{1,2})(?:[\/\-\.](\d{2,4}))?\b/);
+        const isoMatch = line.match(/\b(20\d{2})-(\d{1,2})-(\d{1,2})\b/);
+        if (isoMatch) {
+          return {
+            date: new Date(Number(isoMatch[1]), Number(isoMatch[2]) - 1, Number(isoMatch[3])),
+            matchedText: isoMatch[0],
+          };
+        }
+
+        const textMatch = line.match(
+          /\b(\d{1,2})\s+([A-Za-zÀ-ÿ]+)(?:\s+(\d{2}|\d{4}))?\b|\b([A-Za-zÀ-ÿ]+)\s+(\d{1,2})(?:\s+(\d{2}|\d{4}))?\b/i,
+        );
+        if (textMatch) {
+          const monthToken = (textMatch[2] || textMatch[4] || "").toLowerCase();
+          const month = IMPORT_MONTH_LOOKUP[monthToken];
+          if (month !== undefined) {
+            const day = Number(textMatch[1] || textMatch[5]);
+            const yearToken = textMatch[3] || textMatch[6];
+            const yearValue = yearToken
+              ? Number(yearToken.length === 2 ? `20${yearToken}` : yearToken)
+              : fallbackYear;
+
+            return {
+              date: new Date(yearValue, month, day),
+              matchedText: textMatch[0],
+            };
+          }
+        }
+
+        const numericMatches = Array.from(
+          line.matchAll(/\b(\d{1,2})[\/\-\.](\d{1,2})(?:[\/\-\.](\d{2}|\d{4}))?\b/g),
+        );
+        const numericMatch = numericMatches.find((match) => {
+          const before = line[match.index - 1] || "";
+          const after = line[match.index + match[0].length] || "";
+          return before !== ":" && after !== ":" && Number(match[1]) >= 1 && Number(match[1]) <= 31 && Number(match[2]) >= 1 && Number(match[2]) <= 12;
+        });
+
         if (numericMatch) {
           const day = Number(numericMatch[1]);
           const month = Number(numericMatch[2]) - 1;
@@ -353,24 +389,7 @@
           };
         }
 
-        const textMatch = line.match(
-          /\b(\d{1,2})\s+([A-Za-zÀ-ÿ]+)(?:\s+(\d{2,4}))?\b|\b([A-Za-zÀ-ÿ]+)\s+(\d{1,2})(?:\s+(\d{2,4}))?\b/i,
-        );
-        if (!textMatch) return null;
-
-        const monthToken = (textMatch[2] || textMatch[4] || "").toLowerCase();
-        const month = IMPORT_MONTH_LOOKUP[monthToken];
-        if (month === undefined) return null;
-        const day = Number(textMatch[1] || textMatch[5]);
-        const yearToken = textMatch[3] || textMatch[6];
-        const yearValue = yearToken
-          ? Number(yearToken.length === 2 ? `20${yearToken}` : yearToken)
-          : fallbackYear;
-
-        return {
-          date: new Date(yearValue, month, day),
-          matchedText: textMatch[0],
-        };
+        return null;
       }
 
       function parseImportedLine(line, fallbackYear) {
@@ -381,7 +400,6 @@
         if (!dateInfo || Number.isNaN(dateInfo.date.getTime())) return null;
 
         const lineWithoutDate = normalizedLine.replace(dateInfo.matchedText, "").trim();
-        const lowerTail = lineWithoutDate.toLocaleLowerCase("it-IT");
         const freeMatch = lineWithoutDate.match(/\b(RIP|FNL|FR|FERIE|RIPOSO|MALATTIA|MUTUA|SICK|SICK LEAVE|SICK DAY)\b/i);
         const codeMatch = lineWithoutDate.match(/\b([4-8](?:0[1-9]|[1-3][0-9]|4[0-8]))\b/);
         const timeMatch = lineWithoutDate.match(/\b(\d{1,2})[:\.](\d{2})\s*(?:-|to)\s*(\d{1,2})[:\.](\d{2})\b/i);
@@ -413,6 +431,25 @@
           };
         }
 
+        if (timeMatch) {
+          const startTime = `${String(Number(timeMatch[1])).padStart(2, "0")}:${timeMatch[2]}`;
+          const endTime = `${String(Number(timeMatch[3])).padStart(2, "0")}:${timeMatch[4]}`;
+          const explicitNote = lineWithoutDate
+            .replace(timeMatch[0], "")
+            .replace(codeMatch?.[0] || "", "")
+            .trim();
+          const note = [codeMatch?.[1] || "", explicitNote].filter(Boolean).join(" ");
+          return {
+            kind: "work",
+            date: formatDateInput(dateInfo.date),
+            startTime,
+            endTime,
+            allDay: false,
+            summary: codeMatch ? `Turno ${codeMatch[1]}` : "Turno lavoro",
+            note: note || "Orario esplicito",
+          };
+        }
+
         if (codeMatch) {
           const code = codeMatch[1];
           const decoded = decodeShiftCode(code);
@@ -427,21 +464,94 @@
           };
         }
 
-        if (timeMatch) {
-          const startTime = `${String(Number(timeMatch[1])).padStart(2, "0")}:${timeMatch[2]}`;
-          const endTime = `${String(Number(timeMatch[3])).padStart(2, "0")}:${timeMatch[4]}`;
-          return {
-            kind: "work",
-            date: formatDateInput(dateInfo.date),
-            startTime,
-            endTime,
-            allDay: false,
-            summary: "Turno lavoro",
-            note: lowerTail.replace(timeMatch[0].toLowerCase(), "").trim() || "Orario esplicito",
-          };
-        }
-
         return null;
+      }
+
+      function inferImportYear(text, fallbackYear) {
+        const yearMatch = text.match(/\b(20\d{2})\b/);
+        return yearMatch ? Number(yearMatch[1]) : fallbackYear;
+      }
+
+      function parseImportMatrixHeader(line, fallbackYear) {
+        if (!/\bDipendenti\b/i.test(line)) return null;
+        const dates = [];
+        const dateMatches = line.matchAll(/\b(?:Lu|Ma|Me|Gi|Ve|Sa|Do)\.\s*(\d{1,2})\.(\d{1,2})\./gi);
+        for (const match of dateMatches) {
+          dates.push({
+            day: Number(match[1]),
+            month: Number(match[2]) - 1,
+            year: fallbackYear,
+          });
+        }
+        return dates.length > 0 ? dates : null;
+      }
+
+      function parseImportedMatrixTextToEvents(text, fallbackYear, personQuery) {
+        const query = String(personQuery || "").trim().toLocaleLowerCase("it-IT");
+        if (!query) return [];
+
+        const lines = text.split("\n").map(normalizeImportLine).filter(Boolean);
+        const headerIndex = lines.findIndex((line) => parseImportMatrixHeader(line, fallbackYear));
+        if (headerIndex === -1) return [];
+
+        const year = inferImportYear(text, fallbackYear);
+        const dates = parseImportMatrixHeader(lines[headerIndex], year);
+        if (!dates?.length) return [];
+
+        const row = lines.slice(headerIndex + 1).find((line) => line.toLocaleLowerCase("it-IT").includes(query));
+        if (!row) return [];
+
+        const rowMatch = row.match(/^(.+?)\s+(\d{5,})\s+(.+)$/);
+        if (!rowMatch) return [];
+
+        const employeeName = rowMatch[1].trim();
+        const employeeId = rowMatch[2].trim();
+        const dayTokens = rowMatch[3].trim().split(/\s+/).slice(0, dates.length);
+
+        return dayTokens
+          .map((token, index) => {
+            const dateInfo = dates[index];
+            if (!dateInfo) return null;
+            const date = formatDateInput(new Date(dateInfo.year, dateInfo.month, dateInfo.day));
+            const normalizedToken = token.toUpperCase();
+
+            if (/^[4-8](?:0[1-9]|[1-3][0-9]|4[0-8])$/.test(normalizedToken)) {
+              const decoded = decodeShiftCode(normalizedToken);
+              return {
+                id: `matrix-${employeeId}-${date}-${index}`,
+                kind: "work",
+                date,
+                startTime: decoded.startTime,
+                endTime: decoded.endTime,
+                allDay: false,
+                summary: `Turno ${normalizedToken}`,
+                note: normalizedToken,
+                employeeName,
+              };
+            }
+
+            const summary =
+              normalizedToken === "RIP"
+                ? "Riposo"
+                : normalizedToken === "FR"
+                  ? "Ferie"
+                  : normalizedToken === "FNL"
+                    ? "Da definire"
+                    : normalizedToken === "OF"
+                      ? "Fuori turno"
+                      : normalizedToken;
+
+            return {
+              id: `matrix-${employeeId}-${date}-${index}`,
+              kind: "free",
+              date,
+              allDay: true,
+              summary,
+              note: normalizedToken,
+              employeeName,
+            };
+          })
+          .filter(Boolean);
       }
 
       function expandImportedLines(text, fallbackYear) {
@@ -478,7 +588,10 @@
         return expanded;
       }
 
-      function parseImportedTextToEvents(text, fallbackYear) {
+      function parseImportedTextToEvents(text, fallbackYear, personQuery = "") {
+        const matrixEvents = parseImportedMatrixTextToEvents(text, fallbackYear, personQuery);
+        if (matrixEvents.length > 0) return matrixEvents;
+
         return expandImportedLines(text, fallbackYear)
           .map((line, index) => {
             const parsed = parseImportedLine(line, fallbackYear);
@@ -529,7 +642,9 @@
             return;
           }
 
-          const { start, end } = getShiftRange(event.date, event.startTime, event.endTime);
+          const start = buildDateTime(event.date, event.startTime);
+          let end = buildDateTime(event.date, event.endTime);
+          if (end <= start) end = new Date(end.getTime() + 24 * 3600000);
           rows.push([
             event.summary,
             csvDate(event.date),
@@ -770,11 +885,18 @@
         const [calendarGraphMode, setCalendarGraphMode] = useState("both");
         const [calendarPayLineMode, setCalendarPayLineMode] = useState("daily");
         const [hoveredGraphPointKey, setHoveredGraphPointKey] = useState(null);
-        const [importPanelOpen, setImportPanelOpen] = useState(false);
         const [importText, setImportText] = useState("");
+        const [importPersonQuery, setImportPersonQuery] = useState("");
         const [importedEventsPreview, setImportedEventsPreview] = useState([]);
         const [importStatus, setImportStatus] = useState("");
         const [isImportingFile, setIsImportingFile] = useState(false);
+        const [importCopied, setImportCopied] = useState(false);
+        const [importShowShiftCode, setImportShowShiftCode] = useState(true);
+        const [importShowWeekdays, setImportShowWeekdays] = useState(true);
+        const [importShowGym, setImportShowGym] = useState(false);
+        const [importShowSleep, setImportShowSleep] = useState(false);
+        const [importShowBonuses, setImportShowBonuses] = useState(true);
+        const [importOutputFontSize, setImportOutputFontSize] = useState(11);
         const [copyMonthStatus, setCopyMonthStatus] = useState("");
         const [settingsOpen, setSettingsOpen] = useState(false);
         const [googleCalendarIcsUrl, setGoogleCalendarIcsUrl] = useState(() => readLocalSettings().googleCalendarIcsUrl || "");
@@ -1382,17 +1504,20 @@
         };
 
         const parseImportPreview = React.useCallback(
-          (nextText) => {
-            const parsedEvents = parseImportedTextToEvents(nextText, new Date().getFullYear());
+          (nextText, nextPersonQuery = importPersonQuery) => {
+            const parsedEvents = parseImportedTextToEvents(nextText, new Date().getFullYear(), nextPersonQuery);
+            const looksLikeMatrix = /\bDipendenti\b/i.test(nextText) && /\b(?:Lu|Ma|Me|Gi|Ve|Sa|Do)\.\s*\d{1,2}\.\d{1,2}\./i.test(nextText);
             setImportedEventsPreview(parsedEvents);
             setImportStatus(
               parsedEvents.length > 0
                 ? `${parsedEvents.filter((event) => event.kind === "work").length} turni, ${parsedEvents.filter((event) => event.kind === "sick").length} malattie, ${parsedEvents.filter((event) => event.kind === "free").length} giorni liberi`
-                : "Nessun turno trovato",
+                : looksLikeMatrix
+                  ? "PDF tabellare rilevato: inserisci nome o matricola esatta della riga da importare"
+                  : "Nessun turno trovato",
             );
             return parsedEvents;
           },
-          [],
+          [importPersonQuery],
         );
 
         const handleImportTextChange = (nextText) => {
@@ -1405,6 +1530,13 @@
           parseImportPreview(nextText);
         };
 
+        const handleImportPersonQueryChange = (nextQuery) => {
+          setImportPersonQuery(nextQuery);
+          if (importText.trim()) {
+            parseImportPreview(importText, nextQuery);
+          }
+        };
+
         const handlePdfImport = async (event) => {
           const file = event.target.files?.[0];
           if (!file) return;
@@ -1412,9 +1544,10 @@
           setImportStatus("");
           try {
             const extractedText = await extractPdfLines(file);
-            setImportText(extractedText);
-            parseImportPreview(extractedText);
-            setImportPanelOpen(true);
+            const textWithFileName = `Nome file: ${file.name}\n${extractedText}`;
+            setImportText(textWithFileName);
+            parseImportPreview(textWithFileName);
+            setMode("import");
           } catch (error) {
             console.error("Errore import PDF", error);
             setImportStatus("Import PDF non riuscito");
@@ -1445,6 +1578,230 @@
           link.click();
           URL.revokeObjectURL(link.href);
           setImportStatus("CSV Google Calendar scaricato");
+        };
+
+        const clearImportedText = () => {
+          setImportText("");
+          setImportedEventsPreview([]);
+          setImportStatus("");
+        };
+
+        const getImportedEventType = (event) => {
+          if (event.kind === "sick") return "sick";
+          if (event.kind === "free") return "free";
+          const startHour = Number(event.startTime?.slice(0, 2));
+          if (Number.isNaN(startHour)) return "default";
+          if (startHour >= 5 && startHour < 10) return "morning";
+          if (startHour >= 10 && startHour < 17) return "afternoon";
+          if (startHour >= 17 && startHour < 22) return "evening";
+          return "night";
+        };
+
+        const getImportedEventCardClasses = (type) => {
+          switch (type) {
+            case "morning":
+              return "border-amber-300/25 bg-amber-500/[0.08] text-amber-100";
+            case "afternoon":
+              return "border-sky-300/25 bg-sky-500/[0.08] text-sky-100";
+            case "evening":
+              return "border-violet-300/25 bg-violet-500/[0.08] text-violet-100";
+            case "night":
+              return "border-zinc-300/20 bg-zinc-500/[0.08] text-zinc-100";
+            case "sick":
+              return "border-rose-300/25 bg-rose-500/[0.08] text-rose-100";
+            case "free":
+              return "border-white/5 bg-white/[0.02] text-zinc-500";
+            default:
+              return "border-white/10 bg-white/[0.04] text-zinc-100";
+          }
+        };
+
+        const getImportedEventIcon = (type) => {
+          switch (type) {
+            case "morning":
+              return "sunrise";
+            case "afternoon":
+              return "sun";
+            case "evening":
+              return "sunset";
+            case "night":
+              return "moon";
+            case "sick":
+              return "cross";
+            case "free":
+              return "coffee";
+            default:
+              return "dot";
+          }
+        };
+
+        const getImportedEventSleepText = (event, type) => {
+          if (event.kind !== "work") return type === "free" ? "Sonno suggerito: 23:30 - 07:30" : "";
+          const startHour = Number(event.startTime.slice(0, 2)) + Number(event.startTime.slice(3, 5)) / 60;
+          const endHour = Number(event.endTime.slice(0, 2)) + Number(event.endTime.slice(3, 5)) / 60;
+          const toTime = (hourValue) => {
+            const normalized = ((hourValue % 24) + 24) % 24;
+            const hours = Math.floor(normalized);
+            const minutes = Math.round((normalized - hours) * 60);
+            return `${String(hours).padStart(2, "0")}:${String(minutes).padStart(2, "0")}`;
+          };
+          if (type === "night") {
+            const sleepStart = endHour + 1;
+            return `Sonno suggerito: ${toTime(sleepStart)} - ${toTime(sleepStart + 8)}`;
+          }
+          const wakeUp = Math.min(7, startHour - 1.5);
+          return `Sonno suggerito: ${toTime(wakeUp - 8)} - ${toTime(wakeUp)}`;
+        };
+
+        const importOutputLines = useMemo(() => {
+          const sortedEvents = [...importedEventsPreview].sort((a, b) =>
+            `${a.date} ${a.startTime || "00:00"}`.localeCompare(`${b.date} ${b.startTime || "00:00"}`),
+          );
+          let lastWeekday = -1;
+
+          return sortedEvents.map((event) => {
+            const date = new Date(`${event.date}T00:00:00`);
+            const weekday = date.getDay();
+            const type = getImportedEventType(event);
+            const isNewWeek = weekday === 1 && lastWeekday !== -1 && lastWeekday !== 1;
+            lastWeekday = weekday;
+            const dayLabel = date.toLocaleDateString("it-IT", { day: "2-digit", month: "2-digit" });
+            const weekdayLabel = date.toLocaleDateString("it-IT", { weekday: "short" }).replace(".", "");
+            const holidayName = getHoliday(date);
+            let mainText = `${importShowWeekdays ? `${weekdayLabel} ` : ""}${dayLabel} `;
+            let detailText = "";
+            const chips = [];
+
+            if (event.kind === "free") {
+              mainText += event.summary || "Riposo";
+              detailText = event.note || "";
+            } else if (event.kind === "sick") {
+              mainText += "Malattia";
+              detailText = "Conteggio provvisorio: 6h ordinarie";
+            } else {
+              const windowText = `${event.startTime} - ${event.endTime}`;
+              const noteCode = String(event.note || "").match(/^([4-8]\d{2})\b/);
+              const noteTail = noteCode ? String(event.note || "").replace(noteCode[0], "").trim() : event.note;
+              mainText += importShowShiftCode && noteCode ? `${noteCode[1]} (${windowText})` : `Turno (${windowText})`;
+              if (noteTail && noteTail !== "Orario esplicito") detailText = noteTail;
+              const breakdown = calculateShiftBreakdown(
+                { date: event.date, startTime: event.startTime, endTime: event.endTime },
+                0,
+                0,
+              );
+              const nightHours = breakdown.nightWeekdayHours + breakdown.nightSundayHolidayHours;
+              if (importShowBonuses && nightHours > 0) {
+                chips.push(breakdown.nightSundayHolidayHours > 0 ? `+55% x${nightHours.toFixed(1)}h` : `+50% x${nightHours.toFixed(1)}h`);
+              }
+              if (importShowBonuses && breakdown.mealVoucher > 0) chips.push("+8 buono");
+              if (importShowBonuses && breakdown.unpaidBreakMs > 0) chips.push("-30 min pausa");
+            }
+
+            if (holidayName) chips.push(holidayName);
+            if (importShowGym && event.kind === "work") chips.push("PAL");
+
+            return {
+              key: event.id,
+              event,
+              type,
+              icon: getImportedEventIcon(type),
+              text: mainText.trim(),
+              detailText,
+              sleepText: importShowSleep ? getImportedEventSleepText(event, type) : "",
+              chips,
+              isNewWeek,
+            };
+          });
+        }, [
+          importedEventsPreview,
+          importShowBonuses,
+          importShowGym,
+          importShowShiftCode,
+          importShowSleep,
+          importShowWeekdays,
+        ]);
+
+        const importTotals = useMemo(() => {
+          const months = {};
+          const weeks = new Map();
+          const bonuses = { vouchers: 0, nightHours: 0, holidayNightHours: 0, holidays: 0 };
+          let workEvents = 0;
+          let sickEvents = 0;
+          let freeEvents = 0;
+          let totalHours = 0;
+
+          importedEventsPreview.forEach((event) => {
+            const date = new Date(`${event.date}T00:00:00`);
+            const monthLabel = `${MONTH_OPTIONS[date.getMonth()]} ${date.getFullYear()}`;
+
+            if (event.kind === "free") {
+              freeEvents += 1;
+              return;
+            }
+
+            const shift =
+              event.kind === "sick"
+                ? createSickWorkShift(event.date)
+                : { date: event.date, startTime: event.startTime, endTime: event.endTime };
+            const breakdown = calculateShiftBreakdown(shift, 0, 0);
+            const hours = breakdown.elapsed / 3600000;
+            totalHours += hours;
+            months[monthLabel] = (months[monthLabel] || 0) + hours;
+            const weekKey = getWeekKey(event.date);
+            weeks.set(weekKey, {
+              label: `${new Date(`${weekKey}T00:00:00`).toLocaleDateString("it-IT", {
+                day: "2-digit",
+                month: "2-digit",
+              })}`,
+              hours: (weeks.get(weekKey)?.hours || 0) + hours,
+            });
+            if (event.kind === "sick") {
+              sickEvents += 1;
+            } else {
+              workEvents += 1;
+              if (isSundayOrHoliday(date)) bonuses.holidays += 1;
+              if (breakdown.mealVoucher > 0) bonuses.vouchers += 1;
+              bonuses.nightHours += breakdown.nightWeekdayHours;
+              bonuses.holidayNightHours += breakdown.nightSundayHolidayHours;
+            }
+          });
+
+          return {
+            months,
+            weeks: Array.from(weeks.entries()).sort((a, b) => a[0].localeCompare(b[0])).map((entry) => entry[1]),
+            bonuses,
+            workEvents,
+            sickEvents,
+            freeEvents,
+            totalHours,
+          };
+        }, [importedEventsPreview]);
+
+        const importOutputText = useMemo(
+          () =>
+            importOutputLines
+              .map((line) => {
+                const extras = [
+                  line.detailText,
+                  line.chips.length > 0 ? `[${line.chips.join(" ")}]` : "",
+                  line.sleepText ? `| ${line.sleepText}` : "",
+                ].filter(Boolean);
+                return `${line.text}${extras.length > 0 ? ` ${extras.join(" ")}` : ""}`;
+              })
+              .join("\n"),
+          [importOutputLines],
+        );
+
+        const copyImportOutput = async () => {
+          if (!importOutputText.trim()) return;
+          try {
+            await navigator.clipboard.writeText(importOutputText);
+            setImportCopied(true);
+            setTimeout(() => setImportCopied(false), 2000);
+          } catch (error) {
+            console.error("Errore copia import", error);
+            setImportStatus("Copia non riuscita");
+          }
         };
 
         const updateCalendarMonth = (nextYear, nextMonth) => {
@@ -1998,7 +2355,7 @@
               {!activeTrackSession || mode !== "track" ? (
                 <section className="flex flex-col items-center justify-center min-h-[60vh] text-center">
                   <div className="bg-zinc-900/70 border border-white/10 p-6 sm:p-10 rounded w-full max-w-4xl backdrop-blur">
-                    <div className="grid grid-cols-3 gap-2 mb-8 rounded bg-black/30 p-1">
+                    <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 mb-8 rounded bg-black/30 p-1">
                       <button
                         onClick={() => setMode("calendar")}
                         className={`rounded px-4 py-3 text-xs font-black uppercase tracking-widest transition ${
@@ -2006,6 +2363,14 @@
                         }`}
                       >
                         Calendario
+                      </button>
+                      <button
+                        onClick={() => setMode("import")}
+                        className={`rounded px-4 py-3 text-xs font-black uppercase tracking-widest transition ${
+                          mode === "import" ? "bg-white text-black" : "text-zinc-400 hover:text-white"
+                        }`}
+                      >
+                        Importa
                       </button>
                       <button
                         onClick={() => setMode("track")}
@@ -2030,7 +2395,9 @@
                         ? "Paga Live"
                         : mode === "predict"
                           ? "Previsione giornata"
-                          : currentCalendarMonthLabel}
+                          : mode === "import"
+                            ? "Importa turni"
+                            : currentCalendarMonthLabel}
                     </h2>
 
                     <div className="mb-10 text-left space-y-4">
@@ -2051,6 +2418,282 @@
                             ))}
                           </select>
                         </label>
+                      ) : mode === "import" ? (
+                        <div className="grid grid-cols-1 lg:grid-cols-[0.95fr_1.05fr] gap-5 text-left">
+                          <div className="space-y-4">
+                            <div className="rounded border border-white/10 bg-black/30 p-4">
+                              <div className="flex items-center gap-2 mb-3">
+                                <span className="flex h-6 w-6 items-center justify-center rounded bg-orange-400/15 text-xs font-black text-orange-200">
+                                  1
+                                </span>
+                                <p className="text-xs font-black uppercase tracking-widest text-white">
+                                  Carica orario
+                                </p>
+                              </div>
+                              <label className="mb-3 block">
+                                <span className="mb-2 block text-[10px] font-black uppercase tracking-widest text-zinc-500">
+                                  Nome o matricola
+                                </span>
+                                <input
+                                  type="text"
+                                  value={importPersonQuery}
+                                  onChange={(event) => handleImportPersonQueryChange(event.target.value)}
+                                  placeholder="es. Konrad, Parada o 25886"
+                                  className="w-full rounded border border-white/10 bg-black/40 px-3 py-3 text-sm font-bold text-white outline-none focus:border-orange-300/50"
+                                />
+                              </label>
+                              <input
+                                ref={pdfImportInputRef}
+                                type="file"
+                                accept="application/pdf"
+                                onChange={handlePdfImport}
+                                className="hidden"
+                              />
+                              <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+                                <button
+                                  onClick={() => pdfImportInputRef.current?.click()}
+                                  className="rounded border border-orange-300/25 bg-orange-400/10 px-4 py-3 text-[10px] font-black uppercase tracking-widest text-orange-100 hover:border-orange-200/50"
+                                >
+                                  {isImportingFile ? "Importazione..." : "Importa PDF"}
+                                </button>
+                                <button
+                                  onClick={clearImportedText}
+                                  className="rounded border border-white/10 px-4 py-3 text-[10px] font-black uppercase tracking-widest text-zinc-300 hover:text-white"
+                                >
+                                  Pulisci
+                                </button>
+                              </div>
+                              <p className="mt-3 text-xs font-bold text-zinc-500">
+                                Il PDF viene letto riga per riga, poi puoi correggere il testo estratto prima di usarlo.
+                              </p>
+                            </div>
+
+                            <div className="rounded border border-white/10 bg-black/30 p-4">
+                              <div className="flex items-center gap-2 mb-3">
+                                <span className="flex h-6 w-6 items-center justify-center rounded bg-orange-400/15 text-xs font-black text-orange-200">
+                                  2
+                                </span>
+                                <p className="text-xs font-black uppercase tracking-widest text-white">
+                                  Dati estratti
+                                </p>
+                              </div>
+                              <textarea
+                                value={importText}
+                                onChange={(event) => handleImportTextChange(event.target.value)}
+                                placeholder={"Incolla testo o importa un PDF.\nEsempio: 02 Apr 503 05:00-13:00"}
+                                className="h-72 w-full resize-none rounded border border-white/10 bg-black/40 px-3 py-3 text-xs font-mono leading-relaxed text-white outline-none focus:border-orange-300/50"
+                              />
+                              {importStatus && (
+                                <p className="mt-3 text-[10px] font-black uppercase tracking-widest text-zinc-400">
+                                  {importStatus}
+                                </p>
+                              )}
+                            </div>
+                          </div>
+
+                          <div className="space-y-4">
+                            <div className="rounded border border-white/10 bg-black/30 p-4">
+                              <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+                                <div className="flex items-center gap-2">
+                                  <span className="flex h-6 w-6 items-center justify-center rounded bg-orange-400/15 text-xs font-black text-orange-200">
+                                    3
+                                  </span>
+                                  <p className="text-xs font-black uppercase tracking-widest text-white">
+                                    Riepilogo
+                                  </p>
+                                </div>
+                                <div className="grid grid-cols-2 gap-x-4 gap-y-2 text-[10px] font-black uppercase tracking-widest text-zinc-400">
+                                  {[
+                                    ["codici", importShowShiftCode, setImportShowShiftCode],
+                                    ["giorni", importShowWeekdays, setImportShowWeekdays],
+                                    ["palestra", importShowGym, setImportShowGym],
+                                    ["sonno", importShowSleep, setImportShowSleep],
+                                    ["bonus", importShowBonuses, setImportShowBonuses],
+                                  ].map(([label, checked, setter]) => (
+                                    <label key={label} className="flex cursor-pointer items-center gap-2">
+                                      <input
+                                        type="checkbox"
+                                        checked={checked}
+                                        onChange={(event) => setter(event.target.checked)}
+                                        className="accent-orange-400"
+                                      />
+                                      {label}
+                                    </label>
+                                  ))}
+                                </div>
+                              </div>
+
+                              <div
+                                className="mt-4 min-h-48 rounded border border-white/10 bg-white/[0.03] p-3 font-mono leading-tight"
+                                style={{ fontSize: `${importOutputFontSize}px` }}
+                              >
+                                {importOutputLines.length === 0 ? (
+                                  <div className="py-10 text-center text-xs italic text-zinc-500">
+                                    Nessun turno calcolato.
+                                  </div>
+                                ) : (
+                                  importOutputLines.map((line) => (
+                                    <React.Fragment key={line.key}>
+                                      {line.isNewWeek && (
+                                        <div className="my-3 h-px w-full bg-white/10" />
+                                      )}
+                                      <div
+                                        className={`mb-1 rounded border px-3 py-2 ${getImportedEventCardClasses(line.type)}`}
+                                      >
+                                        <div className="flex items-start gap-2">
+                                          <span className="mt-0.5 min-w-5 text-center text-xs">
+                                            {line.icon === "moon"
+                                              ? "☾"
+                                              : line.icon === "cross"
+                                                ? "+"
+                                                : line.icon === "coffee"
+                                                  ? "☕"
+                                                  : line.icon === "sunrise"
+                                                    ? "↗"
+                                                    : line.icon === "sunset"
+                                                      ? "↘"
+                                                      : "•"}
+                                          </span>
+                                          <div className="min-w-0 flex-1">
+                                            <div className="flex flex-wrap items-center justify-between gap-2">
+                                              <span>{line.text}</span>
+                                              {line.chips.length > 0 && (
+                                                <span className="flex flex-wrap gap-1">
+                                                  {line.chips.map((chip) => (
+                                                    <span
+                                                      key={chip}
+                                                      className="rounded border border-white/10 bg-black/20 px-1.5 py-0.5 text-[0.85em] font-black uppercase tracking-tight"
+                                                    >
+                                                      {chip}
+                                                    </span>
+                                                  ))}
+                                                </span>
+                                              )}
+                                            </div>
+                                            {line.detailText && (
+                                              <div className="mt-1 text-[0.9em] text-zinc-400">{line.detailText}</div>
+                                            )}
+                                            {line.sleepText && (
+                                              <div className="mt-1 text-[0.9em] text-cyan-200/80">{line.sleepText}</div>
+                                            )}
+                                          </div>
+                                        </div>
+                                      </div>
+                                    </React.Fragment>
+                                  ))
+                                )}
+                              </div>
+
+                              <div className="mt-3 flex items-center gap-3 rounded border border-white/10 bg-black/30 px-3 py-2">
+                                <span className="whitespace-nowrap text-[9px] font-black uppercase tracking-widest text-zinc-500">
+                                  Dimensione
+                                </span>
+                                <input
+                                  type="range"
+                                  min="8"
+                                  max="16"
+                                  step="1"
+                                  value={importOutputFontSize}
+                                  onChange={(event) => setImportOutputFontSize(Number(event.target.value))}
+                                  className="w-full accent-orange-400"
+                                />
+                                <span className="w-6 text-right text-[10px] font-black text-zinc-400">
+                                  {importOutputFontSize}
+                                </span>
+                              </div>
+                            </div>
+
+                            {(Object.keys(importTotals.months).length > 0 || importTotals.weeks.length > 0) && (
+                              <div className="rounded border border-white/10 bg-black/30 p-4">
+                                <p className="mb-3 text-xs font-black uppercase tracking-widest text-white">
+                                  Ore totali
+                                </p>
+                                <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                                  <div>
+                                    <p className="mb-2 border-b border-white/10 pb-1 text-[9px] font-black uppercase tracking-widest text-zinc-500">
+                                      Mensili
+                                    </p>
+                                    {Object.entries(importTotals.months).map(([month, hours]) => (
+                                      <div key={month} className="flex justify-between text-xs font-bold text-zinc-300">
+                                        <span>{month}</span>
+                                        <span>{hours.toFixed(1)}h</span>
+                                      </div>
+                                    ))}
+                                  </div>
+                                  <div>
+                                    <p className="mb-2 border-b border-white/10 pb-1 text-[9px] font-black uppercase tracking-widest text-zinc-500">
+                                      Settimanali
+                                    </p>
+                                    {importTotals.weeks.map((week, index) => (
+                                      <div key={`${week.label}-${index}`} className="flex justify-between text-xs font-bold text-zinc-300">
+                                        <span>Settimana {week.label}</span>
+                                        <span>{week.hours.toFixed(1)}h</span>
+                                      </div>
+                                    ))}
+                                  </div>
+                                </div>
+                                <div className="mt-4 grid grid-cols-2 gap-2 border-t border-white/10 pt-3 text-xs font-bold text-zinc-300">
+                                  <span>Turni: {importTotals.workEvents}</span>
+                                  <span>Malattie: {importTotals.sickEvents}</span>
+                                  <span>Giorni liberi: {importTotals.freeEvents}</span>
+                                  <span>Ore: {importTotals.totalHours.toFixed(1)}h</span>
+                                  {importShowBonuses && (
+                                    <>
+                                      <span>Buoni: EUR {(importTotals.bonuses.vouchers * MEAL_VOUCHER_AMOUNT).toFixed(2)}</span>
+                                      <span>Ore notturne: {(importTotals.bonuses.nightHours + importTotals.bonuses.holidayNightHours).toFixed(1)}h</span>
+                                    </>
+                                  )}
+                                </div>
+                              </div>
+                            )}
+
+                            <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+                              <button
+                                onClick={applyImportedEventsToCalendar}
+                                disabled={importedEventsPreview.length === 0}
+                                className={`rounded border px-4 py-3 text-[10px] font-black uppercase tracking-widest transition ${
+                                  importedEventsPreview.length === 0
+                                    ? "cursor-not-allowed border-white/10 text-zinc-600"
+                                    : "border-white/10 bg-white text-black hover:bg-zinc-200"
+                                }`}
+                              >
+                                Usa nel calendario
+                              </button>
+                              <button
+                                onClick={copyImportOutput}
+                                disabled={!importOutputText.trim()}
+                                className={`rounded border px-4 py-3 text-[10px] font-black uppercase tracking-widest transition ${
+                                  !importOutputText.trim()
+                                    ? "cursor-not-allowed border-white/10 text-zinc-600"
+                                    : importCopied
+                                      ? "border-emerald-300/30 bg-emerald-400/10 text-emerald-200"
+                                      : "border-white/10 text-zinc-300 hover:text-white"
+                                }`}
+                              >
+                                {importCopied ? "Copiato" : "Copia testo"}
+                              </button>
+                              <button
+                                onClick={exportImportedEventsToGoogleCsv}
+                                disabled={importedEventsPreview.length === 0}
+                                className={`rounded border px-4 py-3 text-[10px] font-black uppercase tracking-widest transition ${
+                                  importedEventsPreview.length === 0
+                                    ? "cursor-not-allowed border-white/10 text-zinc-600"
+                                    : "border-white/10 text-zinc-300 hover:text-white"
+                                }`}
+                              >
+                                CSV Google
+                              </button>
+                              <a
+                                href="https://calendar.google.com/calendar/u/0/r/settings/export"
+                                target="_blank"
+                                rel="noreferrer"
+                                className="rounded border border-white/10 px-4 py-3 text-center text-[10px] font-black uppercase tracking-widest text-zinc-300 hover:text-white"
+                              >
+                                Apri Google Calendar
+                              </a>
+                            </div>
+                          </div>
+                        </div>
                       ) : mode === "predict" ? (
                         <div className="space-y-4">
                           <label className="block">
@@ -2144,106 +2787,6 @@
                         </div>
                       ) : (
                         <div className="space-y-4">
-                          <div className="rounded border border-white/10 bg-black/30 p-4 text-left">
-                            <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
-                              <div>
-                                <p className="text-[10px] font-black uppercase tracking-widest text-zinc-500">
-                                  Importa turni
-                                </p>
-                                <div className="mt-1 text-sm font-bold text-white">PDF o testo</div>
-                              </div>
-                              <div className="flex flex-wrap gap-2">
-                                <input
-                                  ref={pdfImportInputRef}
-                                  type="file"
-                                  accept="application/pdf"
-                                  onChange={handlePdfImport}
-                                  className="hidden"
-                                />
-                                <button
-                                  onClick={() => pdfImportInputRef.current?.click()}
-                                  className="rounded border border-white/10 px-3 py-3 text-[10px] font-black uppercase tracking-widest text-zinc-300 hover:text-white"
-                                >
-                                  {isImportingFile ? "Importazione..." : "Importa PDF"}
-                                </button>
-                                <button
-                                  onClick={() => setImportPanelOpen((prev) => !prev)}
-                                  className={`rounded border px-3 py-3 text-[10px] font-black uppercase tracking-widest transition ${
-                                    importPanelOpen
-                                      ? "border-orange-400 bg-orange-400/10 text-orange-200"
-                                      : "border-white/10 text-zinc-300 hover:text-white"
-                                  }`}
-                                >
-                                  Incolla testo
-                                </button>
-                                <button
-                                  onClick={applyImportedEventsToCalendar}
-                                  disabled={importedEventsPreview.length === 0}
-                                  className={`rounded border px-3 py-3 text-[10px] font-black uppercase tracking-widest transition ${
-                                    importedEventsPreview.length === 0
-                                      ? "cursor-not-allowed border-white/10 text-zinc-600"
-                                      : "border-white/10 text-zinc-300 hover:text-white"
-                                  }`}
-                                >
-                                  Usa nel calendario
-                                </button>
-                                <button
-                                  onClick={exportImportedEventsToGoogleCsv}
-                                  disabled={importedEventsPreview.length === 0}
-                                  className={`rounded border px-3 py-3 text-[10px] font-black uppercase tracking-widest transition ${
-                                    importedEventsPreview.length === 0
-                                      ? "cursor-not-allowed border-white/10 text-zinc-600"
-                                      : "border-white/10 text-zinc-300 hover:text-white"
-                                  }`}
-                                >
-                                  CSV Google
-                                </button>
-                                <a
-                                  href="https://calendar.google.com/calendar/u/0/r/settings/export"
-                                  target="_blank"
-                                  rel="noreferrer"
-                                  className="rounded border border-white/10 px-3 py-3 text-[10px] font-black uppercase tracking-widest text-zinc-300 hover:text-white"
-                                >
-                                  Apri Google Calendar
-                                </a>
-                              </div>
-                            </div>
-                            {(importPanelOpen || importStatus || importedEventsPreview.length > 0) && (
-                              <div className="mt-4 space-y-3">
-                                {importPanelOpen && (
-                                  <textarea
-                                    value={importText}
-                                    onChange={(event) => handleImportTextChange(event.target.value)}
-                                    placeholder="Incolla qui testo o estratto PDF"
-                                    className="h-40 w-full resize-none rounded border border-white/10 bg-black/40 px-3 py-3 text-xs font-mono text-white"
-                                  />
-                                )}
-                                {importStatus && (
-                                  <p className="text-[10px] font-black uppercase tracking-widest text-zinc-400">
-                                    {importStatus}
-                                  </p>
-                                )}
-                                {importedEventsPreview.length > 0 && (
-                                  <div className="flex flex-wrap gap-2">
-                                    {importedEventsPreview.slice(0, 8).map((event) => (
-                                      <span
-                                        key={event.id}
-                                        className="rounded border border-white/10 bg-white/[0.04] px-2 py-1 text-[10px] font-black uppercase tracking-tight text-zinc-300"
-                                      >
-                                        {event.date}{" "}
-                                        {event.allDay ? event.summary : `${event.startTime}-${event.endTime}`}
-                                      </span>
-                                    ))}
-                                    {importedEventsPreview.length > 8 && (
-                                      <span className="rounded border border-white/10 bg-white/[0.04] px-2 py-1 text-[10px] font-black uppercase tracking-tight text-zinc-500">
-                                        +{importedEventsPreview.length - 8}
-                                      </span>
-                                    )}
-                                  </div>
-                                )}
-                              </div>
-                            )}
-                          </div>
                           <div className="grid grid-cols-2 gap-2">
                             <button
                               onClick={() => setCalendarView("plan")}
@@ -2976,7 +3519,7 @@
                 </section>
               ) : (
                 <section className="flex flex-col items-center">
-                  <div className="grid grid-cols-3 gap-2 mb-8 rounded bg-black/30 p-1 w-full">
+                  <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 mb-8 rounded bg-black/30 p-1 w-full">
                     <button
                       onClick={() => setMode("calendar")}
                       className={`rounded px-4 py-3 text-xs font-black uppercase tracking-widest transition ${
@@ -2984,6 +3527,14 @@
                       }`}
                     >
                       Calendario
+                    </button>
+                    <button
+                      onClick={() => setMode("import")}
+                      className={`rounded px-4 py-3 text-xs font-black uppercase tracking-widest transition ${
+                        mode === "import" ? "bg-white text-black" : "text-zinc-400 hover:text-white"
+                      }`}
+                    >
+                      Importa
                     </button>
                     <button
                       onClick={() => setMode("track")}
