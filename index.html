@@ -416,7 +416,7 @@
         const [autoTrackSession, setAutoTrackSession] = useState(null);
         const [dismissedAutoTrackDate, setDismissedAutoTrackDate] = useState("");
         const [weeklyStats, setWeeklyStats] = useState({ totalHours: 0, totalEarned: 0 });
-        const [mode, setMode] = useState("track");
+        const [mode, setMode] = useState("calendar");
         const [selectedStartTime, setSelectedStartTime] = useState(() => formatTimeInput(roundToHalfHour(new Date())));
         const [predictionDate, setPredictionDate] = useState(() => formatDateInput(new Date()));
         const [predictionStartTime, setPredictionStartTime] = useState(() => formatTimeInput(roundToHalfHour(new Date())));
@@ -427,13 +427,10 @@
         const [importedCalendarShifts, setImportedCalendarShifts] = useState([]);
         const [calendarMonth, setCalendarMonth] = useState(() => formatMonthInput(new Date()));
         const [calendarDate, setCalendarDate] = useState(() => formatDateInput(new Date()));
-        const [calendarStartTime, setCalendarStartTime] = useState("08:00");
-        const [calendarEndTime, setCalendarEndTime] = useState("14:00");
         const [calendarView, setCalendarView] = useState("plan");
         const [calendarGraphMode, setCalendarGraphMode] = useState("both");
         const [calendarPayLineMode, setCalendarPayLineMode] = useState("daily");
         const [hoveredGraphPointKey, setHoveredGraphPointKey] = useState(null);
-        const [editingCalendarShiftId, setEditingCalendarShiftId] = useState(null);
         const [copyMonthStatus, setCopyMonthStatus] = useState("");
         const [settingsOpen, setSettingsOpen] = useState(false);
         const [googleCalendarIcsUrl, setGoogleCalendarIcsUrl] = useState(() => readLocalSettings().googleCalendarIcsUrl || "");
@@ -560,11 +557,12 @@
               prev &&
               prev.prefillDate === today &&
               prev.startTime === ongoing.start.getTime() &&
+              prev.autoEndTime === ongoing.end.getTime() &&
               prev.autoPrefilled
                 ? prev
                 : {
                     startTime: ongoing.start.getTime(),
-                    autoEndTime: null,
+                    autoEndTime: ongoing.end.getTime(),
                     prefillDate: today,
                     autoPrefilled: true,
                   },
@@ -573,16 +571,13 @@
           }
 
           const completed = ranges.filter(({ end }) => end.getTime() <= nowMs);
-          if (completed.length === 0) {
-            const upcoming = ranges.find(({ start }) => start.getTime() > nowMs);
-            if (!upcoming) {
-              setAutoTrackSession(null);
-              return;
-            }
+          const upcoming = ranges.find(({ start }) => start.getTime() > nowMs);
+          if (upcoming) {
             setAutoTrackSession((prev) =>
               prev &&
               prev.prefillDate === today &&
               prev.startTime === upcoming.start.getTime() &&
+              prev.autoEndTime === upcoming.end.getTime() &&
               prev.autoPrefilled
                 ? prev
                 : {
@@ -595,20 +590,15 @@
             return;
           }
 
+          if (completed.length === 0) {
+            setAutoTrackSession(null);
+            return;
+          }
+
           const latestCompleted = completed[completed.length - 1];
-          setAutoTrackSession((prev) =>
-            prev &&
-            prev.prefillDate === today &&
-            prev.startTime === latestCompleted.end.getTime() &&
-            prev.autoPrefilled
-              ? prev
-              : {
-                  startTime: latestCompleted.end.getTime(),
-                  autoEndTime: null,
-                  prefillDate: today,
-                  autoPrefilled: true,
-                },
-          );
+          if (latestCompleted && !ranges.some(({ start }) => start.getTime() > nowMs)) {
+            setAutoTrackSession(null);
+          }
         }, [allCalendarShifts, currentTime, dismissedAutoTrackDate, session]);
 
         const activeTrackSession = session || autoTrackSession;
@@ -657,12 +647,10 @@
 
         const allCalendarShifts = useMemo(
           () =>
-            [
-              ...(importedCalendarShifts.length > 0
-                ? calendarShifts.filter((shift) => !isSeededTestShift(shift))
-                : calendarShifts),
-              ...importedCalendarShifts,
-            ].sort((a, b) =>
+            (importedCalendarShifts.length > 0
+              ? importedCalendarShifts
+              : calendarShifts.filter((shift) => !isSeededTestShift(shift))
+            ).sort((a, b) =>
               `${a.date} ${a.startTime}`.localeCompare(`${b.date} ${b.startTime}`),
             ),
           [calendarShifts, importedCalendarShifts],
@@ -1023,38 +1011,6 @@
           return formatDateInput(monday);
         };
 
-        const saveCalendarShift = async () => {
-          if (!user) return;
-          const nextShift = {
-            id: editingCalendarShiftId || `${Date.now()}`,
-            date: calendarDate,
-            startTime: calendarStartTime,
-            endTime: calendarEndTime,
-          };
-          const nextShifts = editingCalendarShiftId
-            ? calendarShifts.map((shift) => (shift.id === editingCalendarShiftId ? nextShift : shift))
-            : [...calendarShifts, nextShift];
-
-          setCalendarShifts(nextShifts);
-          setEditingCalendarShiftId(null);
-          await saveState({ calendarShifts: nextShifts });
-        };
-
-        const editCalendarShift = (shift) => {
-          setEditingCalendarShiftId(shift.id);
-          setCalendarDate(shift.date);
-          setCalendarMonth(shift.date.slice(0, 7));
-          setCalendarStartTime(shift.startTime);
-          setCalendarEndTime(shift.endTime);
-        };
-
-        const deleteCalendarShift = async (shiftId) => {
-          const nextShifts = calendarShifts.filter((shift) => shift.id !== shiftId);
-          setCalendarShifts(nextShifts);
-          if (editingCalendarShiftId === shiftId) setEditingCalendarShiftId(null);
-          await saveState({ calendarShifts: nextShifts });
-        };
-
         const saveSettings = () => {
           writeLocalSettings({
             googleCalendarIcsUrl: googleCalendarIcsUrl.trim(),
@@ -1081,39 +1037,9 @@
         };
 
         const selectCalendarDay = (dateValue) => {
-          const dayShifts = allCalendarShifts
-            .filter((shift) => shift.date === dateValue)
-            .sort((a, b) => a.startTime.localeCompare(b.startTime));
-          const isSickDay = dayShifts.some(isSickShift);
-          const editableShift = isSickDay ? null : dayShifts.find((shift) => shift.source !== "ical");
-
           setCalendarDate(dateValue);
           setCalendarMonth(dateValue.slice(0, 7));
-          if (editableShift) {
-            editCalendarShift(editableShift);
-          } else {
-            setEditingCalendarShiftId(null);
-          }
         };
-
-        useEffect(() => {
-          const dayShifts = allCalendarShifts
-            .filter((shift) => shift.date === calendarDate)
-            .sort((a, b) => a.startTime.localeCompare(b.startTime));
-
-          if (dayShifts.length === 0 || dayShifts.some(isSickShift)) {
-            if (editingCalendarShiftId !== null) setEditingCalendarShiftId(null);
-            setCalendarStartTime("08:00");
-            setCalendarEndTime("14:00");
-            return;
-          }
-
-          const activeShift = dayShifts.find((shift) => shift.id === editingCalendarShiftId) || dayShifts[0];
-          const nextEditingId = activeShift.source === "ical" ? null : activeShift.id;
-          if (editingCalendarShiftId !== nextEditingId) setEditingCalendarShiftId(nextEditingId);
-          if (calendarStartTime !== activeShift.startTime) setCalendarStartTime(activeShift.startTime);
-          if (calendarEndTime !== activeShift.endTime) setCalendarEndTime(activeShift.endTime);
-        }, [allCalendarShifts, calendarDate]);
 
         const buildMonthlyMarkdown = () => {
           const monthLabel = `${MONTH_OPTIONS[Number(calendarMonth.slice(5, 7)) - 1]} ${calendarMonth.slice(0, 4)}`;
@@ -1276,6 +1202,10 @@
             };
           });
         }, [calendarMonth, effectiveCalendarShifts]);
+        const selectedCalendarDay = useMemo(
+          () => calendarDays.find((day) => day.dateValue === calendarDate) || null,
+          [calendarDate, calendarDays],
+        );
         const monthlyPrediction = useMemo(() => {
           const weeklyHoursByKey = {};
           const payCodeTotals = { ORD: 0, S15: 0, S25: 0, S50: 0 };
@@ -1422,7 +1352,6 @@
         const hoveredGraphPoint =
           monthlyGraphData.points.find((point) => point.key === hoveredGraphPointKey) || monthlyGraphData.points[monthlyGraphData.points.length - 1] || null;
         const currentCalendarMonthLabel = `${MONTH_OPTIONS[Number(calendarMonth.slice(5, 7)) - 1]} ${calendarMonth.slice(0, 4)}`;
-        const selectedCalendarDayIsSick = sickDateSet.has(calendarDate);
         const maxCalendarDayTotal = useMemo(
           () =>
             calendarDays.reduce(
@@ -1574,9 +1503,6 @@
                   <div className="flex items-start justify-between gap-4 mb-4">
                     <div>
                       <h2 className="text-sm font-black uppercase tracking-widest text-white">Impostazioni</h2>
-                      <p className="mt-2 text-sm text-zinc-400">
-                        Questo URL viene salvato solo in questo browser. Non viene sincronizzato con Firebase.
-                      </p>
                     </div>
                     <button
                       onClick={() => {
@@ -1627,9 +1553,6 @@
                       </button>
                     </div>
                   </div>
-                  <p className="mt-3 text-xs text-zinc-500">
-                    Incolla qui l&apos;indirizzo pubblico iCal. All&apos;avvio legge gli eventi orari e usa il titolo solo per riconoscere la malattia. Gli altri eventi tutto il giorno vengono ignorati.
-                  </p>
                   <div className="mt-4 flex flex-wrap gap-2">
                     <button
                       onClick={saveSettings}
@@ -1658,6 +1581,14 @@
                   <div className="bg-zinc-900/70 border border-white/10 p-6 sm:p-10 rounded w-full max-w-4xl backdrop-blur">
                     <div className="grid grid-cols-3 gap-2 mb-8 rounded bg-black/30 p-1">
                       <button
+                        onClick={() => setMode("calendar")}
+                        className={`rounded px-4 py-3 text-xs font-black uppercase tracking-widest transition ${
+                          mode === "calendar" ? "bg-white text-black" : "text-zinc-400 hover:text-white"
+                        }`}
+                      >
+                        Calendario
+                      </button>
+                      <button
                         onClick={() => setMode("track")}
                         className={`rounded px-4 py-3 text-xs font-black uppercase tracking-widest transition ${
                           mode === "track" ? "bg-white text-black" : "text-zinc-400 hover:text-white"
@@ -1672,14 +1603,6 @@
                         }`}
                       >
                         Prevedi
-                      </button>
-                      <button
-                        onClick={() => setMode("calendar")}
-                        className={`rounded px-4 py-3 text-xs font-black uppercase tracking-widest transition ${
-                          mode === "calendar" ? "bg-white text-black" : "text-zinc-400 hover:text-white"
-                        }`}
-                      >
-                        Calendario
                       </button>
                     </div>
 
@@ -2060,72 +1983,49 @@
                             </div>
                           </div>
 
-                          <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
-                            <label className="block">
-                              <span className="block text-[10px] font-bold text-zinc-500 uppercase tracking-widest mb-2">
-                                Giorno selezionato
-                              </span>
-                              <input
-                                type="date"
-                                value={calendarDate}
-                                onChange={(event) => setCalendarDate(event.target.value)}
-                                className="w-full bg-black/40 border border-white/10 rounded px-3 py-3 text-sm font-bold text-white"
-                              />
-                            </label>
-                            <label className="block">
-                              <span className="block text-[10px] font-bold text-zinc-500 uppercase tracking-widest mb-2">
-                                Inizio
-                              </span>
-                              <select
-                                value={calendarStartTime}
-                                onChange={(event) => setCalendarStartTime(event.target.value)}
-                                className="w-full bg-black/40 border border-white/10 rounded px-3 py-3 text-sm font-bold text-white"
-                              >
-                                {TIME_OPTIONS.map((time) => (
-                                  <option key={time} value={time} className="bg-zinc-950">
-                                    {time}
-                                  </option>
+                          <div className="rounded border border-white/10 bg-black/30 p-4 text-left">
+                            <div className="flex flex-wrap items-start justify-between gap-3">
+                              <div>
+                                <p className="text-[10px] font-black uppercase tracking-widest text-zinc-500">
+                                  Giorno selezionato
+                                </p>
+                                <div className="mt-2 text-2xl font-black text-white">
+                                  {selectedCalendarDay
+                                    ? selectedCalendarDay.date.toLocaleDateString("it-IT", {
+                                        weekday: "long",
+                                        day: "2-digit",
+                                        month: "long",
+                                        year: "numeric",
+                                      })
+                                    : new Date(`${calendarDate}T00:00:00`).toLocaleDateString("it-IT", {
+                                        weekday: "long",
+                                        day: "2-digit",
+                                        month: "long",
+                                        year: "numeric",
+                                      })}
+                                </div>
+                              </div>
+                              {selectedCalendarDay?.shifts?.length > 0 && (
+                                <div className={`text-sm font-black ${getAmountTextClasses(selectedCalendarDay.total)}`}>
+                                  EUR {selectedCalendarDay.total.toFixed(2)}
+                                </div>
+                              )}
+                            </div>
+                            {selectedCalendarDay?.shifts?.length > 0 ? (
+                              <div className="mt-4 flex flex-wrap gap-2">
+                                {selectedCalendarDay.shifts.map((shift) => (
+                                  <span
+                                    key={shift.id}
+                                    className="rounded border border-white/10 bg-white/[0.04] px-2 py-1 text-[10px] font-black uppercase tracking-tight text-zinc-300"
+                                  >
+                                    {isSickShift(shift) ? "Malattia 08:00-14:00" : `${shift.startTime}-${shift.endTime}`}
+                                  </span>
                                 ))}
-                              </select>
-                            </label>
-                            <label className="block">
-                              <span className="block text-[10px] font-bold text-zinc-500 uppercase tracking-widest mb-2">
-                                Fine
-                              </span>
-                              <select
-                                value={calendarEndTime}
-                                onChange={(event) => setCalendarEndTime(event.target.value)}
-                                className="w-full bg-black/40 border border-white/10 rounded px-3 py-3 text-sm font-bold text-white"
-                              >
-                                {TIME_OPTIONS.map((time) => (
-                                  <option key={time} value={time} className="bg-zinc-950">
-                                    {time}
-                                  </option>
-                                ))}
-                              </select>
-                            </label>
+                              </div>
+                            ) : (
+                              <p className="mt-4 text-sm font-bold text-zinc-500">Nessun turno.</p>
+                            )}
                           </div>
-
-                          <button
-                            onClick={saveCalendarShift}
-                            disabled={selectedCalendarDayIsSick}
-                            className={`w-full py-4 rounded text-sm font-extrabold transition-all active:scale-[0.99] uppercase tracking-widest ${
-                              selectedCalendarDayIsSick
-                                ? "cursor-not-allowed border border-rose-300/20 bg-rose-500/10 text-rose-100/70"
-                                : "bg-white text-black hover:bg-yellow-400"
-                            }`}
-                          >
-                            {selectedCalendarDayIsSick
-                              ? "Giorno segnato come malattia"
-                              : editingCalendarShiftId
-                                ? "Aggiorna turno"
-                                : "Aggiungi turno locale"}
-                          </button>
-                          {selectedCalendarDayIsSick && (
-                            <p className="text-left text-xs font-bold text-rose-100/70">
-                              Questo giorno e importato da iCal come malattia: sovrascrive i turni e conta come 6h ordinarie base.
-                            </p>
-                          )}
 
                           <div className="bg-black/30 border border-white/10 rounded p-4 text-left">
                             <div className="flex items-start justify-between gap-4 mb-4">
@@ -2237,7 +2137,6 @@
                               <p className="text-sm text-zinc-500 text-center py-4">Nessun turno salvato per questo mese.</p>
                             ) : (
                               monthlyShiftBreakdowns.map(({ shift, totalWithVoucher }) => {
-                                const isReadonlyShift = shift.source === "ical" || isSickShift(shift);
                                 return (
                                   <div
                                     key={shift.id}
@@ -2252,35 +2151,16 @@
                                           {shift.note}
                                         </div>
                                       )}
-                                      {isReadonlyShift && (
-                                        <div className="text-[10px] font-bold uppercase tracking-widest text-zinc-500">
-                                          {isSickShift(shift) ? "Conteggio malattia" : "Importato da iCal"}
-                                        </div>
-                                      )}
+                                      <div className="text-[10px] font-bold uppercase tracking-widest text-zinc-500">
+                                        {isSickShift(shift) ? "Conteggio malattia" : "Importato da iCal"}
+                                      </div>
                                       <div className="text-[10px] font-bold uppercase tracking-widest text-zinc-500">
                                         EUR {totalWithVoucher.toFixed(2)} stima
                                       </div>
                                     </div>
-                                    {isReadonlyShift ? (
-                                      <div className="rounded border border-white/10 px-3 py-2 text-[10px] font-black uppercase tracking-widest text-zinc-500">
-                                        Sola lettura
-                                      </div>
-                                    ) : (
-                                      <div className="flex gap-2">
-                                        <button
-                                          onClick={() => editCalendarShift(shift)}
-                                          className="rounded border border-white/10 px-3 py-2 text-[10px] font-black uppercase tracking-widest text-zinc-300 hover:text-white"
-                                        >
-                                          Modifica
-                                        </button>
-                                        <button
-                                          onClick={() => deleteCalendarShift(shift.id)}
-                                          className="rounded border border-red-500/30 px-3 py-2 text-[10px] font-black uppercase tracking-widest text-red-300 hover:text-red-100"
-                                        >
-                                          Elimina
-                                        </button>
-                                      </div>
-                                    )}
+                                    <div className="rounded border border-white/10 px-3 py-2 text-[10px] font-black uppercase tracking-widest text-zinc-500">
+                                      Sola lettura
+                                    </div>
                                   </div>
                                 );
                               })
@@ -2575,6 +2455,14 @@
                 <section className="flex flex-col items-center">
                   <div className="grid grid-cols-3 gap-2 mb-8 rounded bg-black/30 p-1 w-full">
                     <button
+                      onClick={() => setMode("calendar")}
+                      className={`rounded px-4 py-3 text-xs font-black uppercase tracking-widest transition ${
+                        mode === "calendar" ? "bg-white text-black" : "text-zinc-400 hover:text-white"
+                      }`}
+                    >
+                      Calendario
+                    </button>
+                    <button
                       onClick={() => setMode("track")}
                       className={`rounded px-4 py-3 text-xs font-black uppercase tracking-widest transition ${
                         mode === "track" ? "bg-white text-black" : "text-zinc-400 hover:text-white"
@@ -2589,14 +2477,6 @@
                       }`}
                     >
                       Prevedi
-                    </button>
-                    <button
-                      onClick={() => setMode("calendar")}
-                      className={`rounded px-4 py-3 text-xs font-black uppercase tracking-widest transition ${
-                        mode === "calendar" ? "bg-white text-black" : "text-zinc-400 hover:text-white"
-                      }`}
-                    >
-                      Calendario
                     </button>
                   </div>
                   <div className="text-center mb-10 w-full">
