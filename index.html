@@ -132,6 +132,48 @@
         "assenza malattia",
         "assenza per malattia",
       ];
+      const DARK_THEMES = {
+        classic: {
+          label: "Classico",
+          description: "Nero caldo con accento ambra",
+          pageClass: "bg-[#050505]",
+          overlayClass:
+            "bg-[radial-gradient(circle_at_50%_0%,rgba(234,179,8,0.13),transparent_34%),linear-gradient(180deg,rgba(255,255,255,0.04),transparent_28%)]",
+          activeClass: "border-orange-400 bg-orange-400/10 text-orange-200",
+          focusClass: "focus:border-orange-300/50",
+          accentClass: "accent-orange-400",
+        },
+        graphite: {
+          label: "Grafite",
+          description: "Grigio profondo, meno contrasto cromatico",
+          pageClass: "bg-[#070707]",
+          overlayClass:
+            "bg-[radial-gradient(circle_at_50%_0%,rgba(148,163,184,0.16),transparent_36%),linear-gradient(180deg,rgba(255,255,255,0.035),transparent_30%)]",
+          activeClass: "border-slate-300 bg-slate-300/10 text-slate-100",
+          focusClass: "focus:border-slate-300/50",
+          accentClass: "accent-slate-300",
+        },
+        forest: {
+          label: "Foresta",
+          description: "Verde scuro con accento menta",
+          pageClass: "bg-[#020705]",
+          overlayClass:
+            "bg-[radial-gradient(circle_at_50%_0%,rgba(16,185,129,0.14),transparent_34%),linear-gradient(180deg,rgba(255,255,255,0.035),transparent_30%)]",
+          activeClass: "border-emerald-300 bg-emerald-400/10 text-emerald-100",
+          focusClass: "focus:border-emerald-300/50",
+          accentClass: "accent-emerald-400",
+        },
+        ember: {
+          label: "Brace",
+          description: "Rosso scuro, più caldo",
+          pageClass: "bg-[#080303]",
+          overlayClass:
+            "bg-[radial-gradient(circle_at_50%_0%,rgba(248,113,113,0.14),transparent_34%),linear-gradient(180deg,rgba(255,255,255,0.035),transparent_30%)]",
+          activeClass: "border-red-300 bg-red-400/10 text-red-100",
+          focusClass: "focus:border-red-300/50",
+          accentClass: "accent-red-400",
+        },
+      };
 
       function isSeededTestShift(shift) {
         return String(shift.id).startsWith("seed-");
@@ -178,11 +220,12 @@
       }
 
       function readLocalSettings() {
-        const fallback = { googleCalendarIcsUrl: "", paysForParking: true };
+        const fallback = { googleCalendarIcsUrl: "", paysForParking: true, darkTheme: "classic" };
 
         try {
           const saved = JSON.parse(localStorage.getItem(SETTINGS_STORAGE_KEY));
-          return saved ? { ...fallback, ...saved } : fallback;
+          const nextSettings = saved ? { ...fallback, ...saved } : fallback;
+          return DARK_THEMES[nextSettings.darkTheme] ? nextSettings : { ...nextSettings, darkTheme: fallback.darkTheme };
         } catch {
           return fallback;
         }
@@ -899,6 +942,7 @@
         const [settingsOpen, setSettingsOpen] = useState(false);
         const [googleCalendarIcsUrl, setGoogleCalendarIcsUrl] = useState(() => readLocalSettings().googleCalendarIcsUrl || "");
         const [paysForParking, setPaysForParking] = useState(() => readLocalSettings().paysForParking !== false);
+        const [darkTheme, setDarkTheme] = useState(() => readLocalSettings().darkTheme || "classic");
         const [settingsStatus, setSettingsStatus] = useState("");
         const [icalSyncStatus, setIcalSyncStatus] = useState("");
         const [currentTime, setCurrentTime] = useState(new Date());
@@ -1488,6 +1532,7 @@
           writeLocalSettings({
             googleCalendarIcsUrl: googleCalendarIcsUrl.trim(),
             paysForParking,
+            darkTheme,
           });
           setSettingsStatus("Impostazioni salvate in questo browser");
         };
@@ -1497,6 +1542,7 @@
           writeLocalSettings({
             googleCalendarIcsUrl: "",
             paysForParking,
+            darkTheme,
           });
           setSettingsStatus("URL iCal rimosso da questo browser");
         };
@@ -2190,6 +2236,7 @@
         const liveRate =
           (liveBaseRateByCode[livePayCode] || PAYSLIP_REGULAR_HOURLY_RATE) +
           (isNightShift(currentTime) && livePayCode !== "S50" ? liveNightExtraRate : 0);
+        const activeTheme = DARK_THEMES[darkTheme] || DARK_THEMES.classic;
 
         useEffect(() => {
           if (!activeTrackSession?.autoEndTime) {
@@ -2214,8 +2261,8 @@
         }
 
         return (
-          <div className="min-h-screen bg-[#050505] text-white font-sans flex flex-col items-center p-4 sm:p-6">
-            <div className="fixed inset-0 pointer-events-none bg-[radial-gradient(circle_at_50%_0%,rgba(234,179,8,0.13),transparent_34%),linear-gradient(180deg,rgba(255,255,255,0.04),transparent_28%)]"></div>
+          <div className={`min-h-screen ${activeTheme.pageClass} text-white font-sans flex flex-col items-center p-4 sm:p-6`}>
+            <div className={`fixed inset-0 pointer-events-none ${activeTheme.overlayClass}`}></div>
 
             <main className="w-full max-w-4xl z-10">
               <header className="flex flex-col gap-4 sm:flex-row sm:justify-between sm:items-center mb-10">
@@ -2268,6 +2315,31 @@
                       className="w-full rounded border border-white/10 bg-black/40 px-3 py-3 text-sm font-bold text-white"
                     />
                   </label>
+                  <div className="mt-4">
+                    <span className="mb-2 block text-[10px] font-bold uppercase tracking-widest text-zinc-500">
+                      Tema scuro
+                    </span>
+                    <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
+                      {Object.entries(DARK_THEMES).map(([themeKey, theme]) => (
+                        <button
+                          key={themeKey}
+                          onClick={() => setDarkTheme(themeKey)}
+                          className={`rounded border p-3 text-left transition ${
+                            darkTheme === themeKey
+                              ? theme.activeClass
+                              : "border-white/10 bg-black/20 text-zinc-300 hover:border-white/20 hover:text-white"
+                          }`}
+                        >
+                          <span className="block text-xs font-black uppercase tracking-widest">
+                            {theme.label}
+                          </span>
+                          <span className="mt-1 block text-[10px] font-bold uppercase tracking-widest text-zinc-500">
+                            {theme.description}
+                          </span>
+                        </button>
+                      ))}
+                    </div>
+                  </div>
                   <div className="mt-4">
                     <span className="mb-2 block text-[10px] font-bold uppercase tracking-widest text-zinc-500">
                       Paghi per il parcheggio?
