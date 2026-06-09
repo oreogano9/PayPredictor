@@ -67,6 +67,34 @@
       .themed-shadow {
         box-shadow: 0 0 0 1px rgba(var(--theme-accent-rgb), 0.12);
       }
+
+      .themed-card {
+        background: rgba(var(--theme-accent-rgb), 0.07);
+        border: 1px solid rgba(var(--theme-accent-rgb), 0.12);
+      }
+
+      .themed-card-strong {
+        background: rgba(var(--theme-accent-rgb), 0.12);
+        border: 1px solid rgba(var(--theme-accent-rgb), 0.2);
+      }
+
+      .themed-negative {
+        background: rgba(127, 29, 29, 0.18);
+        border: 1px solid rgba(185, 28, 28, 0.18);
+        color: #fecaca;
+      }
+
+      .themed-tier-low {
+        color: var(--theme-tier-low);
+      }
+
+      .themed-tier-mid {
+        color: var(--theme-tier-mid);
+      }
+
+      .themed-tier-high {
+        color: var(--theme-tier-high);
+      }
     </style>
   </head>
   <body>
@@ -181,6 +209,9 @@
           accentText: "#fed7aa",
           accentStrong: "#ffffff",
           accentHover: "#facc15",
+          tierLow: "#d4d4d8",
+          tierMid: "#93c5fd",
+          tierHigh: "#fb923c",
         },
         graphite: {
           label: "Grafite",
@@ -193,6 +224,9 @@
           accentText: "#e2e8f0",
           accentStrong: "#e2e8f0",
           accentHover: "#f8fafc",
+          tierLow: "#a1a1aa",
+          tierMid: "#cbd5e1",
+          tierHigh: "#f8fafc",
         },
         forest: {
           label: "Foresta",
@@ -205,6 +239,9 @@
           accentText: "#d1fae5",
           accentStrong: "#6ee7b7",
           accentHover: "#a7f3d0",
+          tierLow: "#a1a1aa",
+          tierMid: "#67e8f9",
+          tierHigh: "#6ee7b7",
         },
         ember: {
           label: "Brace",
@@ -217,6 +254,9 @@
           accentText: "#fee2e2",
           accentStrong: "#fca5a5",
           accentHover: "#fecaca",
+          tierLow: "#a1a1aa",
+          tierMid: "#f0abfc",
+          tierHigh: "#fca5a5",
         },
       };
 
@@ -2220,32 +2260,15 @@
         };
         const getAmountTextClasses = (dayTotal) => {
           const intensity = getPayRelativeIntensity(dayTotal);
-          if (intensity >= 0.8) {
-            return "text-orange-300";
-          }
-          if (intensity >= 0.6) {
-            return "text-amber-300";
-          }
-          if (intensity >= 0.4) {
-            return "text-blue-300";
-          }
-          if (intensity >= 0.2) {
-            return "text-slate-300";
-          }
-          return "text-zinc-300";
+          if (intensity >= 0.68) return "themed-tier-high";
+          if (intensity >= 0.34) return "themed-tier-mid";
+          return "themed-tier-low";
         };
         const getPayMarkerStyle = (dayTotal) => {
           const intensity = getPayRelativeIntensity(dayTotal);
-          let color = "rgb(113 113 122)";
-          if (intensity >= 0.8) {
-            color = "rgb(251 146 60)";
-          } else if (intensity >= 0.6) {
-            color = "rgb(245 158 11)";
-          } else if (intensity >= 0.4) {
-            color = "rgb(96 165 250)";
-          } else if (intensity >= 0.2) {
-            color = "rgb(100 116 139)";
-          }
+          let color = "var(--theme-tier-low)";
+          if (intensity >= 0.68) color = "var(--theme-tier-high)";
+          else if (intensity >= 0.34) color = "var(--theme-tier-mid)";
           return {
             backgroundColor: color,
           };
@@ -2314,6 +2337,9 @@
               "--theme-accent-text": activeTheme.accentText,
               "--theme-accent-strong": activeTheme.accentStrong,
               "--theme-accent-hover": activeTheme.accentHover,
+              "--theme-tier-low": activeTheme.tierLow,
+              "--theme-tier-mid": activeTheme.tierMid,
+              "--theme-tier-high": activeTheme.tierHigh,
             }}
           >
             <div className={`fixed inset-0 pointer-events-none ${activeTheme.overlayClass}`}></div>
@@ -3178,7 +3204,7 @@
                                 <p className="text-[10px] font-black text-zinc-500 uppercase tracking-widest mb-2">
                                   Netto + buoni
                                 </p>
-                                <div className="text-4xl font-black tabular-nums text-emerald-200">
+                                <div className="text-4xl font-black tabular-nums themed-text">
                                   EUR {monthlyPrediction.total.toLocaleString("it-IT", {
                                     minimumFractionDigits: 2,
                                     maximumFractionDigits: 2,
@@ -3188,56 +3214,56 @@
                                   Stima netto busta: EUR {monthlyPrediction.payslipNetEstimate.net.toFixed(2)}
                                 </p>
                               </div>
-                              <div className="text-right text-[10px] font-black uppercase tracking-widest text-zinc-500">
+                              <div className="text-right text-[10px] font-black uppercase tracking-widest themed-tier-low">
                                 {(monthlyPrediction.paidElapsed / 3600000).toFixed(1)} h pagate
                               </div>
                             </div>
                             <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-6 gap-3 mb-4">
-                              <div className="bg-white/5 rounded p-3">
+                              <div className="themed-card rounded p-3">
                                 <p className="text-[9px] font-black uppercase tracking-widest text-zinc-500 mb-1">
                                   Guadagno turni
                                 </p>
-                                <p className="text-sm font-black text-white">
+                                <p className="text-sm font-black themed-text">
                                   EUR {monthlyPrediction.earningsTotal.toFixed(2)}
                                 </p>
                               </div>
-                              <div className="bg-red-500/10 rounded p-3">
-                                <p className="text-[9px] font-black uppercase tracking-widest text-red-200 mb-1">
+                              <div className="themed-negative rounded p-3">
+                                <p className="text-[9px] font-black uppercase tracking-widest mb-1">
                                   Parcheggio
                                 </p>
-                                <p className="text-sm font-black text-red-100">
+                                <p className="text-sm font-black">
                                   -EUR {monthlyPrediction.parkingDeduction.toFixed(2)}
                                 </p>
                               </div>
-                              <div className="bg-white/5 rounded p-3">
+                              <div className="themed-card rounded p-3">
                                 <p className="text-[9px] font-black uppercase tracking-widest text-zinc-500 mb-1">
                                   Dopo parcheggio
                                 </p>
-                                <p className="text-sm font-black text-white">
+                                <p className="text-sm font-black themed-text">
                                   EUR {monthlyPrediction.incomeAfterParking.toFixed(2)}
                                 </p>
                               </div>
-                              <div className="bg-sky-500/10 rounded p-3">
-                                <p className="text-[9px] font-black uppercase tracking-widest text-sky-200 mb-1">
+                              <div className="themed-card rounded p-3">
+                                <p className="text-[9px] font-black uppercase tracking-widest themed-tier-low mb-1">
                                   Lordo busta
                                 </p>
-                                <p className="text-sm font-black text-sky-100">
+                                <p className="text-sm font-black themed-text">
                                   EUR {monthlyPrediction.payslipNetEstimate.grossPayroll.toFixed(2)}
                                 </p>
                               </div>
-                              <div className="bg-emerald-500/10 rounded p-3">
-                                <p className="text-[9px] font-black uppercase tracking-widest text-emerald-200 mb-1">
+                              <div className="themed-card rounded p-3">
+                                <p className="text-[9px] font-black uppercase tracking-widest themed-tier-low mb-1">
                                   Buoni pasto
                                 </p>
-                                <p className="text-sm font-black text-emerald-100">
+                                <p className="text-sm font-black themed-text">
                                   EUR {monthlyPrediction.foodVouchers.toFixed(2)}
                                 </p>
                               </div>
-                              <div className="bg-violet-500/10 rounded p-3">
-                                <p className="text-[9px] font-black uppercase tracking-widest text-violet-200 mb-1">
+                              <div className="themed-card rounded p-3">
+                                <p className="text-[9px] font-black uppercase tracking-widest themed-tier-low mb-1">
                                   Ore notturne
                                 </p>
-                                <p className="text-sm font-black text-violet-100">
+                                <p className="text-sm font-black themed-text">
                                   {getTotalNightHours(monthlyPrediction).toFixed(2)}h
                                 </p>
                               </div>
@@ -3248,30 +3274,30 @@
                                 .map(([code, hours]) => (
                                   <span
                                     key={code}
-                                    className="bg-white/[0.04] border border-white/10 text-zinc-300 text-[9px] font-black px-2 py-1 rounded uppercase tracking-tight"
+                                    className="themed-soft text-[9px] font-black px-2 py-1 rounded uppercase tracking-tight"
                                   >
                                     {getPayCode(code).label}: {hours.toFixed(2)}h
                                   </span>
                                 ))}
                               {monthlyPrediction.nightWeekdayExtra > 0 && (
-                                <span className="bg-white/[0.04] border border-white/10 text-zinc-300 text-[9px] font-black px-2 py-1 rounded uppercase tracking-tight">
+                                <span className="themed-soft text-[9px] font-black px-2 py-1 rounded uppercase tracking-tight">
                                   NTT: +EUR {monthlyPrediction.nightWeekdayExtra.toFixed(2)}
                                 </span>
                               )}
                               {monthlyPrediction.nightSundayHolidayExtra > 0 && (
-                                <span className="bg-white/[0.04] border border-white/10 text-zinc-300 text-[9px] font-black px-2 py-1 rounded uppercase tracking-tight">
+                                <span className="themed-soft text-[9px] font-black px-2 py-1 rounded uppercase tracking-tight">
                                   NTD: +EUR {monthlyPrediction.nightSundayHolidayExtra.toFixed(2)}
                                 </span>
                               )}
                               {monthlyPrediction.unpaidBreakMs > 0 && (
-                                <span className="bg-red-500/[0.06] border border-red-400/15 text-red-200/80 text-[9px] font-black px-2 py-1 rounded uppercase tracking-tight">
+                                <span className="themed-negative text-[9px] font-black px-2 py-1 rounded uppercase tracking-tight">
                                   Pausa pranzo: -{monthlyPrediction.unpaidBreakMs / 60000} min
                                 </span>
                               )}
-                              <span className="bg-red-500/[0.06] border border-red-400/15 text-red-200/80 text-[9px] font-black px-2 py-1 rounded uppercase tracking-tight">
+                              <span className="themed-negative text-[9px] font-black px-2 py-1 rounded uppercase tracking-tight">
                                 Trattenute busta: -EUR {monthlyPrediction.payslipNetEstimate.totalDeductions.toFixed(2)}
                               </span>
-                              <span className="bg-white/[0.04] border border-white/10 text-zinc-300 text-[9px] font-black px-2 py-1 rounded uppercase tracking-tight">
+                              <span className="themed-soft text-[9px] font-black px-2 py-1 rounded uppercase tracking-tight">
                                 Crediti busta: +EUR {monthlyPrediction.payslipNetEstimate.totalCredits.toFixed(2)}
                               </span>
                             </div>
