@@ -893,8 +893,6 @@
         const [importCopied, setImportCopied] = useState(false);
         const [importShowShiftCode, setImportShowShiftCode] = useState(true);
         const [importShowWeekdays, setImportShowWeekdays] = useState(true);
-        const [importShowGym, setImportShowGym] = useState(false);
-        const [importShowSleep, setImportShowSleep] = useState(false);
         const [importShowBonuses, setImportShowBonuses] = useState(true);
         const [importOutputFontSize, setImportOutputFontSize] = useState(11);
         const [copyMonthStatus, setCopyMonthStatus] = useState("");
@@ -1520,16 +1518,6 @@
           [importPersonQuery],
         );
 
-        const handleImportTextChange = (nextText) => {
-          setImportText(nextText);
-          if (!nextText.trim()) {
-            setImportedEventsPreview([]);
-            setImportStatus("");
-            return;
-          }
-          parseImportPreview(nextText);
-        };
-
         const handleImportPersonQueryChange = (nextQuery) => {
           setImportPersonQuery(nextQuery);
           if (importText.trim()) {
@@ -1582,6 +1570,7 @@
 
         const clearImportedText = () => {
           setImportText("");
+          setImportPersonQuery("");
           setImportedEventsPreview([]);
           setImportStatus("");
         };
@@ -1635,24 +1624,6 @@
           }
         };
 
-        const getImportedEventSleepText = (event, type) => {
-          if (event.kind !== "work") return type === "free" ? "Sonno suggerito: 23:30 - 07:30" : "";
-          const startHour = Number(event.startTime.slice(0, 2)) + Number(event.startTime.slice(3, 5)) / 60;
-          const endHour = Number(event.endTime.slice(0, 2)) + Number(event.endTime.slice(3, 5)) / 60;
-          const toTime = (hourValue) => {
-            const normalized = ((hourValue % 24) + 24) % 24;
-            const hours = Math.floor(normalized);
-            const minutes = Math.round((normalized - hours) * 60);
-            return `${String(hours).padStart(2, "0")}:${String(minutes).padStart(2, "0")}`;
-          };
-          if (type === "night") {
-            const sleepStart = endHour + 1;
-            return `Sonno suggerito: ${toTime(sleepStart)} - ${toTime(sleepStart + 8)}`;
-          }
-          const wakeUp = Math.min(7, startHour - 1.5);
-          return `Sonno suggerito: ${toTime(wakeUp - 8)} - ${toTime(wakeUp)}`;
-        };
-
         const importOutputLines = useMemo(() => {
           const sortedEvents = [...importedEventsPreview].sort((a, b) =>
             `${a.date} ${a.startTime || "00:00"}`.localeCompare(`${b.date} ${b.startTime || "00:00"}`),
@@ -1698,8 +1669,6 @@
             }
 
             if (holidayName) chips.push(holidayName);
-            if (importShowGym && event.kind === "work") chips.push("PAL");
-
             return {
               key: event.id,
               event,
@@ -1707,7 +1676,6 @@
               icon: getImportedEventIcon(type),
               text: mainText.trim(),
               detailText,
-              sleepText: importShowSleep ? getImportedEventSleepText(event, type) : "",
               chips,
               isNewWeek,
             };
@@ -1715,9 +1683,7 @@
         }, [
           importedEventsPreview,
           importShowBonuses,
-          importShowGym,
           importShowShiftCode,
-          importShowSleep,
           importShowWeekdays,
         ]);
 
@@ -2430,18 +2396,6 @@
                                   Carica orario
                                 </p>
                               </div>
-                              <label className="mb-3 block">
-                                <span className="mb-2 block text-[10px] font-black uppercase tracking-widest text-zinc-500">
-                                  Nome o matricola
-                                </span>
-                                <input
-                                  type="text"
-                                  value={importPersonQuery}
-                                  onChange={(event) => handleImportPersonQueryChange(event.target.value)}
-                                  placeholder="es. Konrad, Parada o 25886"
-                                  className="w-full rounded border border-white/10 bg-black/40 px-3 py-3 text-sm font-bold text-white outline-none focus:border-orange-300/50"
-                                />
-                              </label>
                               <input
                                 ref={pdfImportInputRef}
                                 type="file"
@@ -2460,12 +2414,14 @@
                                   onClick={clearImportedText}
                                   className="rounded border border-white/10 px-4 py-3 text-[10px] font-black uppercase tracking-widest text-zinc-300 hover:text-white"
                                 >
-                                  Pulisci
+                                  Reset
                                 </button>
                               </div>
-                              <p className="mt-3 text-xs font-bold text-zinc-500">
-                                Il PDF viene letto riga per riga, poi puoi correggere il testo estratto prima di usarlo.
-                              </p>
+                              {importText && (
+                                <p className="mt-3 text-[10px] font-black uppercase tracking-widest text-zinc-500">
+                                  File caricato
+                                </p>
+                              )}
                             </div>
 
                             <div className="rounded border border-white/10 bg-black/30 p-4">
@@ -2474,15 +2430,21 @@
                                   2
                                 </span>
                                 <p className="text-xs font-black uppercase tracking-widest text-white">
-                                  Dati estratti
+                                  Scegli riga
                                 </p>
                               </div>
-                              <textarea
-                                value={importText}
-                                onChange={(event) => handleImportTextChange(event.target.value)}
-                                placeholder={"Incolla testo o importa un PDF.\nEsempio: 02 Apr 503 05:00-13:00"}
-                                className="h-72 w-full resize-none rounded border border-white/10 bg-black/40 px-3 py-3 text-xs font-mono leading-relaxed text-white outline-none focus:border-orange-300/50"
-                              />
+                              <label className="block">
+                                <span className="mb-2 block text-[10px] font-black uppercase tracking-widest text-zinc-500">
+                                  Nome o matricola
+                                </span>
+                                <input
+                                  type="text"
+                                  value={importPersonQuery}
+                                  onChange={(event) => handleImportPersonQueryChange(event.target.value)}
+                                  placeholder="es. Mario, Rossi, 48291"
+                                  className="w-full rounded border border-white/10 bg-black/40 px-3 py-3 text-sm font-bold text-white outline-none focus:border-orange-300/50"
+                                />
+                              </label>
                               {importStatus && (
                                 <p className="mt-3 text-[10px] font-black uppercase tracking-widest text-zinc-400">
                                   {importStatus}
@@ -2506,8 +2468,6 @@
                                   {[
                                     ["codici", importShowShiftCode, setImportShowShiftCode],
                                     ["giorni", importShowWeekdays, setImportShowWeekdays],
-                                    ["palestra", importShowGym, setImportShowGym],
-                                    ["sonno", importShowSleep, setImportShowSleep],
                                     ["bonus", importShowBonuses, setImportShowBonuses],
                                   ].map(([label, checked, setter]) => (
                                     <label key={label} className="flex cursor-pointer items-center gap-2">
@@ -2572,9 +2532,6 @@
                                             </div>
                                             {line.detailText && (
                                               <div className="mt-1 text-[0.9em] text-zinc-400">{line.detailText}</div>
-                                            )}
-                                            {line.sleepText && (
-                                              <div className="mt-1 text-[0.9em] text-cyan-200/80">{line.sleepText}</div>
                                             )}
                                           </div>
                                         </div>
