@@ -1093,6 +1093,8 @@
         const [hoveredGraphPointKey, setHoveredGraphPointKey] = useState(null);
         const [expandedCalendarShiftId, setExpandedCalendarShiftId] = useState(null);
         const [previewCalendarDate, setPreviewCalendarDate] = useState("");
+        const [newShiftStartTime, setNewShiftStartTime] = useState("08:00");
+        const [newShiftEndTime, setNewShiftEndTime] = useState("14:00");
         const [importText, setImportText] = useState("");
         const [importPersonQuery, setImportPersonQuery] = useState("");
         const [importedEventsPreview, setImportedEventsPreview] = useState([]);
@@ -1114,6 +1116,7 @@
         const cleanedSeedShiftsRef = useRef(false);
         const pdfImportInputRef = useRef(null);
         const previousSelectedCalendarDateRef = useRef("");
+        const previousSelectedCalendarShiftRef = useRef("");
         const calendarLongPressTimerRef = useRef(null);
         const [loading, setLoading] = useState(true);
         const [services, setServices] = useState(null);
@@ -2035,6 +2038,34 @@
           await saveState({ calendarShifts: nextShifts });
         };
 
+        const createCalendarShift = async (dateValue) => {
+          if (!user || !dateValue) return;
+          const nextShift = {
+            id: `local-${dateValue}-${Date.now()}`,
+            kind: "work",
+            source: "local",
+            date: dateValue,
+            startTime: newShiftStartTime,
+            endTime: newShiftEndTime,
+            note: "Inserito manualmente",
+          };
+          const nextShifts = [...calendarShifts, nextShift].sort((a, b) =>
+            `${a.date} ${a.startTime}`.localeCompare(`${b.date} ${b.startTime}`),
+          );
+
+          setCalendarShifts(nextShifts);
+          setExpandedCalendarShiftId(nextShift.id);
+          await saveState({ calendarShifts: nextShifts });
+        };
+
+        const deleteCalendarShift = async (shift) => {
+          if (!user || shift?.source !== "local") return;
+          const nextShifts = calendarShifts.filter((savedShift) => savedShift.id !== shift.id);
+          setCalendarShifts(nextShifts);
+          setExpandedCalendarShiftId(null);
+          await saveState({ calendarShifts: nextShifts });
+        };
+
         const getShiftBreakdownEntry = (shift) => {
           const monthlyEntry = monthlyShiftBreakdowns.find((entry) => entry.shift.id === shift.id);
           if (monthlyEntry) return monthlyEntry;
@@ -2276,9 +2307,14 @@
         );
         useEffect(() => {
           if (!selectedCalendarDay) return;
-          if (previousSelectedCalendarDateRef.current === selectedCalendarDay.dateValue) return;
+          const firstShiftId = selectedCalendarDay.shifts[0]?.id || "";
+          const dateChanged = previousSelectedCalendarDateRef.current !== selectedCalendarDay.dateValue;
+          const firstShiftChanged = previousSelectedCalendarShiftRef.current !== firstShiftId;
           previousSelectedCalendarDateRef.current = selectedCalendarDay.dateValue;
-          setExpandedCalendarShiftId(selectedCalendarDay.shifts[0]?.id || null);
+          previousSelectedCalendarShiftRef.current = firstShiftId;
+          if (dateChanged || firstShiftChanged) {
+            setExpandedCalendarShiftId(firstShiftId || null);
+          }
         }, [selectedCalendarDay]);
         const monthlyPrediction = useMemo(() => {
           const weeklyHoursByKey = {};
@@ -2518,6 +2554,171 @@
           (liveBaseRateByCode[livePayCode] || PAYSLIP_REGULAR_HOURLY_RATE) +
           (isNightShift(currentTime) && livePayCode !== "S50" ? liveNightExtraRate : 0);
         const activeTheme = DARK_THEMES[darkTheme] || DARK_THEMES.classic;
+        const renderCalendarShiftEditor = (shift, entry, compact = false) => {
+          const isExpanded = expandedCalendarShiftId === shift.id;
+          const breakdown = entry.breakdown;
+          const isSick = isSickShift(shift);
+          const isOvernight = !isSick && shift.endTime <= shift.startTime;
+          const nightHours = breakdown.nightWeekdayHours + breakdown.nightSundayHolidayHours;
+
+          return (
+            <div
+              key={shift.id}
+              className={`rounded border transition ${
+                isExpanded
+                  ? "border-white/20 bg-white/[0.06]"
+                  : "border-white/10 bg-white/[0.035]"
+              }`}
+            >
+              <button
+                type="button"
+                onClick={() => setExpandedCalendarShiftId(isExpanded ? null : shift.id)}
+                className={`flex w-full items-start justify-between gap-3 text-left ${compact ? "p-2.5" : "p-3"}`}
+                aria-expanded={isExpanded}
+              >
+                <div className="min-w-0">
+                  <div className="flex flex-wrap items-center gap-2">
+                    {isSick && renderSickIcon("h-5 w-5")}
+                    <span className="text-sm font-black text-white">
+                      {isSick ? "Malattia" : `${shift.startTime}-${shift.endTime}`}
+                    </span>
+                    {isOvernight && (
+                      <span className="rounded border border-violet-300/25 bg-violet-500/10 px-2 py-0.5 text-[9px] font-black uppercase tracking-widest text-violet-200">
+                        Giorno dopo
+                      </span>
+                    )}
+                  </div>
+                  <div className="mt-1 flex flex-wrap gap-2 text-[10px] font-bold uppercase tracking-widest text-zinc-500">
+                    <span>{(breakdown.elapsed / 3600000).toFixed(1)}h totali</span>
+                    <span>{(breakdown.paidElapsed / 3600000).toFixed(1)}h pagate</span>
+                    {nightHours > 0 && <span>{nightHours.toFixed(1)}h notturne</span>}
+                    {shift.note && <span>{shift.note}</span>}
+                  </div>
+                </div>
+                <div className={`shrink-0 text-sm font-black ${getAmountTextClasses(entry.totalWithVoucher)}`}>
+                  EUR {entry.totalWithVoucher.toFixed(2)}
+                </div>
+              </button>
+              {isExpanded && (
+                <div className={`border-t border-white/10 ${compact ? "p-2.5" : "p-3"}`}>
+                  {isSick ? (
+                    <p className="text-xs font-bold text-rose-100/80">
+                      Conteggio placeholder: 6h ordinarie, dalle {SICK_SHIFT_START} alle {SICK_SHIFT_END}.
+                    </p>
+                  ) : (
+                    <div className="grid grid-cols-2 gap-2 sm:gap-3">
+                      <label className="text-[10px] font-black uppercase tracking-widest text-zinc-500">
+                        Inizio
+                        <select
+                          value={shift.startTime}
+                          onChange={(event) => updateCalendarShiftTime(shift, "startTime", event.target.value)}
+                          className="mt-2 w-full rounded border border-white/10 bg-black px-2 py-2 text-sm font-black text-white outline-none themed-focus sm:px-3"
+                        >
+                          {TIME_OPTIONS.map((time) => (
+                            <option key={time} value={time}>
+                              {time}
+                            </option>
+                          ))}
+                        </select>
+                      </label>
+                      <label className="text-[10px] font-black uppercase tracking-widest text-zinc-500">
+                        Fine
+                        <select
+                          value={shift.endTime}
+                          onChange={(event) => updateCalendarShiftTime(shift, "endTime", event.target.value)}
+                          className="mt-2 w-full rounded border border-white/10 bg-black px-2 py-2 text-sm font-black text-white outline-none themed-focus sm:px-3"
+                        >
+                          {TIME_OPTIONS.map((time) => (
+                            <option key={time} value={time}>
+                              {time}
+                            </option>
+                          ))}
+                        </select>
+                      </label>
+                    </div>
+                  )}
+                  <div className="mt-3 flex flex-wrap gap-2">
+                    {Object.entries(breakdown.payCodeTotals)
+                      .filter(([, hours]) => hours > 0)
+                      .map(([code, hours]) => (
+                        <span key={code} className="rounded bg-white/[0.05] px-2 py-1 text-[9px] font-black uppercase tracking-tight text-zinc-300">
+                          {getPayCode(code).label}: {hours.toFixed(2)}h
+                        </span>
+                      ))}
+                    {breakdown.mealVoucher > 0 && (
+                      <span className="rounded bg-white/[0.05] px-2 py-1 text-[9px] font-black uppercase tracking-tight text-zinc-300">
+                        Buono: EUR {breakdown.mealVoucher.toFixed(2)}
+                      </span>
+                    )}
+                    {breakdown.unpaidBreakMs > 0 && (
+                      <span className="rounded bg-white/[0.05] px-2 py-1 text-[9px] font-black uppercase tracking-tight text-zinc-300">
+                        Pausa: -{breakdown.unpaidBreakMs / 60000} min
+                      </span>
+                    )}
+                  </div>
+                  {shift.source === "local" && (
+                    <button
+                      type="button"
+                      onClick={() => deleteCalendarShift(shift)}
+                      className="mt-3 rounded border border-red-400/20 bg-red-500/[0.05] px-3 py-2 text-[9px] font-black uppercase tracking-widest text-red-200/80 hover:border-red-300/35"
+                    >
+                      Rimuovi turno
+                    </button>
+                  )}
+                </div>
+              )}
+            </div>
+          );
+        };
+        const renderNewShiftEditor = (dateValue, compact = false) => (
+          <div className={`rounded border border-dashed border-white/15 bg-white/[0.025] ${compact ? "p-2.5" : "p-3"}`}>
+            <p className="mb-3 text-[10px] font-black uppercase tracking-widest text-zinc-500">
+              Crea giornata lavorativa
+            </p>
+            <div className="grid grid-cols-2 gap-2 sm:gap-3">
+              <label className="text-[10px] font-black uppercase tracking-widest text-zinc-500">
+                Inizio
+                <select
+                  value={newShiftStartTime}
+                  onChange={(event) => setNewShiftStartTime(event.target.value)}
+                  className="mt-2 w-full rounded border border-white/10 bg-black px-2 py-2 text-sm font-black text-white outline-none themed-focus sm:px-3"
+                >
+                  {TIME_OPTIONS.map((time) => (
+                    <option key={time} value={time}>
+                      {time}
+                    </option>
+                  ))}
+                </select>
+              </label>
+              <label className="text-[10px] font-black uppercase tracking-widest text-zinc-500">
+                Fine
+                <select
+                  value={newShiftEndTime}
+                  onChange={(event) => setNewShiftEndTime(event.target.value)}
+                  className="mt-2 w-full rounded border border-white/10 bg-black px-2 py-2 text-sm font-black text-white outline-none themed-focus sm:px-3"
+                >
+                  {TIME_OPTIONS.map((time) => (
+                    <option key={time} value={time}>
+                      {time}
+                    </option>
+                  ))}
+                </select>
+              </label>
+            </div>
+            <button
+              type="button"
+              onClick={() => createCalendarShift(dateValue)}
+              className="mt-3 w-full rounded themed-primary px-3 py-2.5 text-[10px] font-black uppercase tracking-widest transition"
+            >
+              Aggiungi turno
+            </button>
+            {newShiftEndTime <= newShiftStartTime && (
+              <p className="mt-2 text-[10px] font-bold text-violet-200">
+                La fine viene conteggiata nel giorno successivo, ma il turno resta sul {new Date(`${dateValue}T00:00:00`).toLocaleDateString("it-IT", { day: "2-digit", month: "2-digit" })}.
+              </p>
+            )}
+          </div>
+        );
 
         useEffect(() => {
           if (!activeTrackSession?.autoEndTime) {
@@ -3175,91 +3376,108 @@
                                   const isSick = day.isSick;
                                   const startsWeek = day.date.getDay() === 1 && index > 0;
                                   return (
-                                    <button
+                                    <div
                                       key={day.dateValue}
-                                      onClick={() => selectCalendarDay(day.dateValue)}
-                                      onDoubleClick={() => openCalendarDayPreview(day.dateValue)}
-                                      onPointerDown={() => handleCalendarDayPointerDown(day.dateValue)}
-                                      onPointerUp={handleCalendarDayPointerEnd}
-                                      onPointerLeave={handleCalendarDayPointerEnd}
-                                      onPointerCancel={handleCalendarDayPointerEnd}
-                                      className={`w-full rounded border p-3 text-left align-top transition ${getCalendarCardClasses(isSelected, hasShift, isSick)} ${startsWeek ? "mt-4" : ""}`}
+                                      className={`w-full overflow-hidden rounded border text-left align-top transition ${getCalendarCardClasses(isSelected, hasShift, isSick)} ${startsWeek ? "mt-4" : ""}`}
                                     >
-                                      <div className="flex items-start justify-between gap-3">
-                                        <div>
-                                          <div className="text-sm font-black text-white">
-                                            {day.date.toLocaleDateString("it-IT", {
-                                              weekday: "short",
-                                              day: "2-digit",
-                                              month: "short",
-                                            })}
-                                          </div>
-                                          <div className="text-[10px] font-bold uppercase tracking-widest text-zinc-500 mt-1 flex items-center gap-1">
-                                            {isSick ? (
-                                              <>
-                                                {renderSickIcon("h-4 w-4")}
-                                                <span className="text-rose-200">Malattia</span>
-                                                <span
-                                                  className={`inline-flex items-center rounded border px-1.5 py-0.5 text-[10px] font-black normal-case tracking-normal ${getDurationChipClasses(
-                                                    day.displayHours,
-                                                  )}`}
-                                                >
-                                                  {day.displayHours.toFixed(1)}h
-                                                </span>
-                                              </>
-                                            ) : hasShift ? (
-                                              <>
-                                                {hasNightShift && (
+                                      <button
+                                        type="button"
+                                        onClick={() => selectCalendarDay(day.dateValue)}
+                                        onDoubleClick={() => openCalendarDayPreview(day.dateValue)}
+                                        onPointerDown={() => handleCalendarDayPointerDown(day.dateValue)}
+                                        onPointerUp={handleCalendarDayPointerEnd}
+                                        onPointerLeave={handleCalendarDayPointerEnd}
+                                        onPointerCancel={handleCalendarDayPointerEnd}
+                                        className="w-full p-3 text-left"
+                                      >
+                                        <div className="flex items-start justify-between gap-3">
+                                          <div>
+                                            <div className="text-sm font-black text-white">
+                                              {day.date.toLocaleDateString("it-IT", {
+                                                weekday: "short",
+                                                day: "2-digit",
+                                                month: "short",
+                                              })}
+                                            </div>
+                                            <div className="text-[10px] font-bold uppercase tracking-widest text-zinc-500 mt-1 flex items-center gap-1">
+                                              {isSick ? (
+                                                <>
+                                                  {renderSickIcon("h-4 w-4")}
+                                                  <span className="text-rose-200">Malattia</span>
                                                   <span
-                                                    aria-hidden="true"
-                                                    className="inline-flex h-4 w-4 items-center justify-center rounded border border-violet-300/35 bg-violet-500/12 text-[10px] text-violet-200"
+                                                    className={`inline-flex items-center rounded border px-1.5 py-0.5 text-[10px] font-black normal-case tracking-normal ${getDurationChipClasses(
+                                                      day.displayHours,
+                                                    )}`}
                                                   >
-                                                    ☾
+                                                    {day.displayHours.toFixed(1)}h
                                                   </span>
-                                                )}
-                                                <span
-                                                  className={`inline-flex items-center rounded border px-1.5 py-0.5 text-[10px] font-black normal-case tracking-normal ${getDurationChipClasses(
-                                                    day.displayHours,
-                                                  )}`}
-                                                >
-                                                  {day.displayHours.toFixed(1)}h
-                                                </span>
-                                              </>
-                                            ) : (
-                                              "Nessun turno salvato"
-                                            )}
-                                          </div>
-                                        </div>
-                                        {hasShift && (
-                                          <div className="text-right">
-                                            <div className="mb-1 flex justify-end">
-                                              <span className="h-1.5 w-8 rounded-full" style={getPayMarkerStyle(day.total)}></span>
-                                            </div>
-                                            <div className={`text-sm font-black ${getAmountTextClasses(day.total)}`}>
-                                              EUR {day.total.toFixed(2)}
-                                            </div>
-                                            <div className="text-[10px] font-bold uppercase tracking-widest mt-1 text-zinc-400">
-                                              {isSick
-                                                ? "Malattia"
-                                                : `${day.shifts.length} turno${day.shifts.length === 1 ? "" : "i"}`}
+                                                </>
+                                              ) : hasShift ? (
+                                                <>
+                                                  {hasNightShift && (
+                                                    <span
+                                                      aria-hidden="true"
+                                                      className="inline-flex h-4 w-4 items-center justify-center rounded border border-violet-300/35 bg-violet-500/12 text-[10px] text-violet-200"
+                                                    >
+                                                      ☾
+                                                    </span>
+                                                  )}
+                                                  <span
+                                                    className={`inline-flex items-center rounded border px-1.5 py-0.5 text-[10px] font-black normal-case tracking-normal ${getDurationChipClasses(
+                                                      day.displayHours,
+                                                    )}`}
+                                                  >
+                                                    {day.displayHours.toFixed(1)}h
+                                                  </span>
+                                                </>
+                                              ) : (
+                                                "Nessun turno salvato"
+                                              )}
                                             </div>
                                           </div>
-                                        )}
-                                      </div>
-                                      {isSick ? (
-                                        <div className="mt-3 text-[11px] font-bold text-rose-100/80">
-                                          Conteggio standard malattia: 6h ordinarie.
-                                        </div>
-                                      ) : hasShift && (
-                                        <div className="mt-3 space-y-1">
-                                          {day.shifts.map((shift) => (
-                                            <div key={shift.id} className="text-[11px] font-bold text-zinc-300">
-                                              {shift.startTime}-{shift.endTime}
+                                          {hasShift && (
+                                            <div className="text-right">
+                                              <div className="mb-1 flex justify-end">
+                                                <span className="h-1.5 w-8 rounded-full" style={getPayMarkerStyle(day.total)}></span>
+                                              </div>
+                                              <div className={`text-sm font-black ${getAmountTextClasses(day.total)}`}>
+                                                EUR {day.total.toFixed(2)}
+                                              </div>
+                                              <div className="text-[10px] font-bold uppercase tracking-widest mt-1 text-zinc-400">
+                                                {isSick
+                                                  ? "Malattia"
+                                                  : `${day.shifts.length} turno${day.shifts.length === 1 ? "" : "i"}`}
+                                              </div>
                                             </div>
-                                          ))}
+                                          )}
+                                        </div>
+                                        {isSick ? (
+                                          <div className="mt-3 text-[11px] font-bold text-rose-100/80">
+                                            Conteggio standard malattia: 6h ordinarie.
+                                          </div>
+                                        ) : hasShift && !isSelected ? (
+                                          <div className="mt-3 space-y-1">
+                                            {day.shifts.map((shift) => (
+                                              <div key={shift.id} className="text-[11px] font-bold text-zinc-300">
+                                                {shift.startTime}-{shift.endTime}
+                                              </div>
+                                            ))}
+                                          </div>
+                                        ) : null}
+                                      </button>
+                                      {isSelected && (
+                                        <div className="space-y-2 border-t border-white/10 bg-black/20 p-2.5">
+                                          {hasShift
+                                            ? day.shifts.map((shift) => {
+                                                const entry =
+                                                  selectedDayPreviewData.entries.find((item) => item.shift.id === shift.id) ||
+                                                  getShiftBreakdownEntry(shift);
+                                                return renderCalendarShiftEditor(shift, entry, true);
+                                              })
+                                            : renderNewShiftEditor(day.dateValue, true)}
                                         </div>
                                       )}
-                                    </button>
+                                    </div>
                                   );
                                 })}
                             </div>
@@ -3356,7 +3574,7 @@
                             </div>
                           </div>
 
-                          <div className="rounded border border-white/10 bg-black/30 p-4 text-left">
+                          <div className="hidden rounded border border-white/10 bg-black/30 p-4 text-left sm:block">
                             <div className="flex flex-wrap items-start justify-between gap-3">
                               <div>
                                 <p className="text-[10px] font-black uppercase tracking-widest text-zinc-500">
@@ -3391,115 +3609,14 @@
                             {selectedCalendarDay?.shifts?.length > 0 ? (
                               <div className="mt-4 space-y-2">
                                 {selectedCalendarDay.shifts.map((shift) => {
-                                  const isExpanded = expandedCalendarShiftId === shift.id;
-                                  const entry = selectedDayPreviewData.entries.find((item) => item.shift.id === shift.id) || getShiftBreakdownEntry(shift);
-                                  const breakdown = entry.breakdown;
-                                  const isSick = isSickShift(shift);
-                                  const isOvernight = !isSick && shift.endTime <= shift.startTime;
-                                  const nightHours = breakdown.nightWeekdayHours + breakdown.nightSundayHolidayHours;
-                                  return (
-                                    <div
-                                      key={shift.id}
-                                      className={`rounded border transition ${
-                                        isExpanded
-                                          ? "border-white/20 bg-white/[0.06]"
-                                          : "border-white/10 bg-white/[0.035]"
-                                      }`}
-                                    >
-                                      <button
-                                        type="button"
-                                        onClick={() => setExpandedCalendarShiftId(isExpanded ? null : shift.id)}
-                                        className="flex w-full items-start justify-between gap-3 p-3 text-left"
-                                        aria-expanded={isExpanded}
-                                      >
-                                        <div className="min-w-0">
-                                          <div className="flex flex-wrap items-center gap-2">
-                                            {isSick && renderSickIcon("h-5 w-5")}
-                                            <span className="text-sm font-black text-white">
-                                              {isSick ? "Malattia" : `${shift.startTime}-${shift.endTime}`}
-                                            </span>
-                                            {isOvernight && (
-                                              <span className="rounded border border-violet-300/25 bg-violet-500/10 px-2 py-0.5 text-[9px] font-black uppercase tracking-widest text-violet-200">
-                                                Giorno dopo
-                                              </span>
-                                            )}
-                                          </div>
-                                          <div className="mt-1 flex flex-wrap gap-2 text-[10px] font-bold uppercase tracking-widest text-zinc-500">
-                                            <span>{(breakdown.elapsed / 3600000).toFixed(1)}h totali</span>
-                                            <span>{(breakdown.paidElapsed / 3600000).toFixed(1)}h pagate</span>
-                                            {nightHours > 0 && <span>{nightHours.toFixed(1)}h notturne</span>}
-                                            {shift.note && <span>{shift.note}</span>}
-                                          </div>
-                                        </div>
-                                        <div className={`shrink-0 text-sm font-black ${getAmountTextClasses(entry.totalWithVoucher)}`}>
-                                          EUR {entry.totalWithVoucher.toFixed(2)}
-                                        </div>
-                                      </button>
-                                      {isExpanded && (
-                                        <div className="border-t border-white/10 p-3">
-                                          {isSick ? (
-                                            <p className="text-xs font-bold text-rose-100/80">
-                                              Conteggio placeholder: 6h ordinarie, dalle {SICK_SHIFT_START} alle {SICK_SHIFT_END}.
-                                            </p>
-                                          ) : (
-                                            <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
-                                              <label className="text-[10px] font-black uppercase tracking-widest text-zinc-500">
-                                                Inizio
-                                                <select
-                                                  value={shift.startTime}
-                                                  onChange={(event) => updateCalendarShiftTime(shift, "startTime", event.target.value)}
-                                                  className="mt-2 w-full rounded border border-white/10 bg-black px-3 py-2 text-sm font-black text-white outline-none themed-focus"
-                                                >
-                                                  {TIME_OPTIONS.map((time) => (
-                                                    <option key={time} value={time}>
-                                                      {time}
-                                                    </option>
-                                                  ))}
-                                                </select>
-                                              </label>
-                                              <label className="text-[10px] font-black uppercase tracking-widest text-zinc-500">
-                                                Fine
-                                                <select
-                                                  value={shift.endTime}
-                                                  onChange={(event) => updateCalendarShiftTime(shift, "endTime", event.target.value)}
-                                                  className="mt-2 w-full rounded border border-white/10 bg-black px-3 py-2 text-sm font-black text-white outline-none themed-focus"
-                                                >
-                                                  {TIME_OPTIONS.map((time) => (
-                                                    <option key={time} value={time}>
-                                                      {time}
-                                                    </option>
-                                                  ))}
-                                                </select>
-                                              </label>
-                                            </div>
-                                          )}
-                                          <div className="mt-3 flex flex-wrap gap-2">
-                                            {Object.entries(breakdown.payCodeTotals)
-                                              .filter(([, hours]) => hours > 0)
-                                              .map(([code, hours]) => (
-                                                <span key={code} className="rounded bg-white/[0.05] px-2 py-1 text-[9px] font-black uppercase tracking-tight text-zinc-300">
-                                                  {getPayCode(code).label}: {hours.toFixed(2)}h
-                                                </span>
-                                              ))}
-                                            {breakdown.mealVoucher > 0 && (
-                                              <span className="rounded bg-white/[0.05] px-2 py-1 text-[9px] font-black uppercase tracking-tight text-zinc-300">
-                                                Buono: EUR {breakdown.mealVoucher.toFixed(2)}
-                                              </span>
-                                            )}
-                                            {breakdown.unpaidBreakMs > 0 && (
-                                              <span className="rounded bg-white/[0.05] px-2 py-1 text-[9px] font-black uppercase tracking-tight text-zinc-300">
-                                                Pausa: -{breakdown.unpaidBreakMs / 60000} min
-                                              </span>
-                                            )}
-                                          </div>
-                                        </div>
-                                      )}
-                                    </div>
-                                  );
+                                  const entry =
+                                    selectedDayPreviewData.entries.find((item) => item.shift.id === shift.id) ||
+                                    getShiftBreakdownEntry(shift);
+                                  return renderCalendarShiftEditor(shift, entry);
                                 })}
                               </div>
                             ) : (
-                              <p className="mt-4 text-sm font-bold text-zinc-500">Nessun turno.</p>
+                              <div className="mt-4">{renderNewShiftEditor(calendarDate)}</div>
                             )}
                           </div>
 
