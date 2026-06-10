@@ -157,19 +157,26 @@
       const UNPAID_BREAK_DURATION = 30 * 60000;
       const SICK_SHIFT_START = "08:00";
       const SICK_SHIFT_END = "14:00";
+      const LEAVE_SHIFT_START = "08:00";
+      const LEAVE_SHIFT_END = "14:00";
       const WEEKLY_GOAL_HOURS = 30;
       const FULL_TIME_WEEKLY_HOURS = 38.5;
       const MONTHLY_ORDINARY_HOURS = 130;
       const MONTHLY_PARKING_DEDUCTION = 46.0;
-      const PAYSLIP_REGULAR_HOURLY_RATE = 920.77 / MONTHLY_ORDINARY_HOURS;
+      const PAYSLIP_MONTHLY_BASE = 920.77;
+      const PAYSLIP_REGULAR_HOURLY_RATE = PAYSLIP_MONTHLY_BASE / MONTHLY_ORDINARY_HOURS;
       const PAYSLIP_S15_RATE = 7.18664;
       const PAYSLIP_S50_RATE = 9.37387;
       const PAYSLIP_S25_RATE = 7.81156;
+      const PAYSLIP_S45_RATE = 9.06141;
       const PAYSLIP_NTT_RATE = 3.12462;
       const PAYSLIP_NTD_RATE = 3.43709;
       const PAYSLIP_SHIFT_ALLOWANCE_RATE = 0.20259;
       const PAYSLIP_DAILY_TURNISTA_RATE = 3.30381;
       const PAYSLIP_CAMPO_RATE = 0.20259;
+      const PAYSLIP_HOLIDAY_REST_RATE = 36.83091;
+      const PAYSLIP_LEAVE_DAY_ALLOWANCE_RATE = 3.30381;
+      const PAYSLIP_UNION_DUES_RATE = 0.01;
       const PAYSLIP_FONDO_TRASPORTO_RATE = 0.0016667;
       const PAYSLIP_IVS_RATE = 0.0919;
       const PAYSLIP_FIS_RATE = 0.0027;
@@ -179,14 +186,16 @@
       const PAYSLIP_IRPEF_RATE = 0.23;
       const PAYSLIP_EMPLOYEE_DEDUCTION = 117.21;
       const PAYSLIP_TRATTAMENTO_INTEGRATIVO = 101.91;
-      const PAYSLIP_L207_INDEMNITY = 53.15;
+      const PAYSLIP_L207_INDEMNITY_RATE = 0.053;
       const PAYSLIP_ROUNDING = 0.44;
+      const HOURS_EPSILON = 0.000001;
       const STORAGE_KEY = `earnings-tracker:${appId}:main`;
       const SETTINGS_STORAGE_KEY = `earnings-tracker:${appId}:settings`;
       const PAY_CODES = {
         ORD: { label: "Ore ordinarie", multiplier: 1 },
         S15: { label: "Ore supplementari 15%", multiplier: SUPPLEMENTAL_15_MULTIPLIER },
         S25: { label: "Straordinario 25%", multiplier: OVERTIME_25_MULTIPLIER },
+        S45: { label: "Straordinario notturno 145%", multiplier: 1.45 },
         S50: { label: "Supplementare notturno feriale", multiplier: SUPPLEMENTAL_50_MULTIPLIER },
       };
 
@@ -229,6 +238,18 @@
         "certificato medico",
         "assenza malattia",
         "assenza per malattia",
+      ];
+      const PAID_LEAVE_KEYWORDS = [
+        "ferie",
+        "ferie godute",
+        "giorno ferie",
+        "giornata ferie",
+        "vacation",
+        "vacation day",
+        "annual leave",
+        "paid leave",
+        "holiday leave",
+        "on leave",
       ];
       const DARK_THEMES = {
         classic: {
@@ -321,6 +342,14 @@
         return shift?.kind === "sick";
       }
 
+      function isLeaveShift(shift) {
+        return shift?.kind === "leave";
+      }
+
+      function isAbsenceShift(shift) {
+        return isSickShift(shift) || isLeaveShift(shift);
+      }
+
       function createSickWorkShift(dateValue) {
         return {
           id: `derived-sick-${dateValue}`,
@@ -333,8 +362,25 @@
         };
       }
 
+      function createLeaveWorkShift(dateValue) {
+        return {
+          id: `derived-leave-${dateValue}`,
+          date: dateValue,
+          startTime: LEAVE_SHIFT_START,
+          endTime: LEAVE_SHIFT_END,
+          source: "derived",
+          kind: "leave",
+          note: "Ferie",
+        };
+      }
+
       function readLocalState() {
-        const fallback = { session: null, weeklyStats: { totalHours: 0, totalEarned: 0 }, calendarShifts: DEFAULT_CALENDAR_SHIFTS };
+        const fallback = {
+          session: null,
+          weeklyStats: { totalHours: 0, totalEarned: 0 },
+          calendarShifts: DEFAULT_CALENDAR_SHIFTS,
+          monthlyVoucherOverrides: {},
+        };
 
         try {
           const saved = JSON.parse(localStorage.getItem(STORAGE_KEY));
@@ -358,7 +404,12 @@
       }
 
       function readLocalSettings() {
-        const fallback = { googleCalendarIcsUrl: "", paysForParking: true, darkTheme: "classic" };
+        const fallback = {
+          googleCalendarIcsUrl: "",
+          paysForParking: true,
+          paysUnionDues: true,
+          darkTheme: "classic",
+        };
 
         try {
           const saved = JSON.parse(localStorage.getItem(SETTINGS_STORAGE_KEY));
@@ -423,6 +474,11 @@
       function isSickLeaveSummary(summary) {
         const normalizedSummary = summary.toLocaleLowerCase("it-IT");
         return SICK_LEAVE_KEYWORDS.some((keyword) => normalizedSummary.includes(keyword));
+      }
+
+      function isPaidLeaveSummary(summary) {
+        const normalizedSummary = summary.toLocaleLowerCase("it-IT");
+        return PAID_LEAVE_KEYWORDS.some((keyword) => normalizedSummary.includes(keyword));
       }
 
       function enumerateIcsDates(start, end, isAllDay) {
@@ -938,8 +994,9 @@
           const start = parseIcsDateValue(dtStartValue);
           const end = parseIcsDateValue(dtEndValue);
           const isSickLeave = isSickLeaveSummary(summary);
+          const isPaidLeave = isPaidLeaveSummary(summary);
 
-          if (!dtStartValue || (!dtEndValue && !isSickLeave)) {
+          if (!dtStartValue || (!dtEndValue && !isSickLeave && !isPaidLeave)) {
             return;
           }
 
@@ -954,6 +1011,22 @@
                 source: "ical",
                 kind: "sick",
                 note: "Malattia",
+              });
+            });
+            return;
+          }
+
+          if (isPaidLeave) {
+            const leaveDates = enumerateIcsDates(start, end, isAllDay);
+            leaveDates.forEach((dateValue, leaveIndex) => {
+              shifts.push({
+                id: `ical-leave-${dateValue}-${index}-${leaveIndex}`,
+                date: dateValue,
+                startTime: "00:00",
+                endTime: "00:00",
+                source: "ical",
+                kind: "leave",
+                note: "Ferie",
               });
             });
             return;
@@ -1007,7 +1080,7 @@
         return {
           total: 0,
           base: 0,
-          payCodeTotals: { ORD: 0, S15: 0, S25: 0, S50: 0 },
+          payCodeTotals: { ORD: 0, S15: 0, S25: 0, S45: 0, S50: 0 },
           nightExtra: 0,
           nightWeekdayExtra: 0,
           nightSundayHolidayExtra: 0,
@@ -1017,6 +1090,8 @@
           elapsed: 0,
           paidElapsed: 0,
           unpaidBreakMs: 0,
+          leaveHours: 0,
+          sickHours: 0,
         };
       }
 
@@ -1028,6 +1103,7 @@
             ORD: left.payCodeTotals.ORD + right.payCodeTotals.ORD,
             S15: left.payCodeTotals.S15 + right.payCodeTotals.S15,
             S25: left.payCodeTotals.S25 + right.payCodeTotals.S25,
+            S45: left.payCodeTotals.S45 + right.payCodeTotals.S45,
             S50: left.payCodeTotals.S50 + right.payCodeTotals.S50,
           },
           nightExtra: left.nightExtra + right.nightExtra,
@@ -1039,6 +1115,8 @@
           elapsed: left.elapsed + right.elapsed,
           paidElapsed: left.paidElapsed + right.paidElapsed,
           unpaidBreakMs: left.unpaidBreakMs + right.unpaidBreakMs,
+          leaveHours: left.leaveHours + right.leaveHours,
+          sickHours: left.sickHours + right.sickHours,
         };
       }
 
@@ -1084,6 +1162,7 @@
           formatTimeInput(new Date(roundToHalfHour(new Date()).getTime() + 6 * 3600000)),
         );
         const [calendarShifts, setCalendarShifts] = useState([]);
+        const [monthlyVoucherOverrides, setMonthlyVoucherOverrides] = useState({});
         const [importedCalendarShifts, setImportedCalendarShifts] = useState([]);
         const [calendarMonth, setCalendarMonth] = useState(() => formatMonthInput(new Date()));
         const [calendarDate, setCalendarDate] = useState(() => formatDateInput(new Date()));
@@ -1108,6 +1187,7 @@
         const [copyMonthStatus, setCopyMonthStatus] = useState("");
         const [googleCalendarIcsUrl, setGoogleCalendarIcsUrl] = useState(() => readLocalSettings().googleCalendarIcsUrl || "");
         const [paysForParking, setPaysForParking] = useState(() => readLocalSettings().paysForParking !== false);
+        const [paysUnionDues, setPaysUnionDues] = useState(() => readLocalSettings().paysUnionDues !== false);
         const [darkTheme, setDarkTheme] = useState(() => readLocalSettings().darkTheme || "classic");
         const [settingsStatus, setSettingsStatus] = useState("");
         const [icalSyncStatus, setIcalSyncStatus] = useState("");
@@ -1165,6 +1245,7 @@
               setSession(data.session || null);
               setWeeklyStats(data.weeklyStats || { totalHours: 0, totalEarned: 0 });
               setCalendarShifts(data.calendarShifts || []);
+              setMonthlyVoucherOverrides(data.monthlyVoucherOverrides || {});
             };
 
             syncLocalState();
@@ -1188,6 +1269,7 @@
               setSession(data.session || null);
               setWeeklyStats(data.weeklyStats || { totalHours: 0, totalEarned: 0 });
               setCalendarShifts(data.calendarShifts || []);
+              setMonthlyVoucherOverrides(data.monthlyVoucherOverrides || {});
             }
           });
         }, [isLocalMode, services, user]);
@@ -1209,13 +1291,13 @@
             return;
           }
 
-          if (allCalendarShifts.some((shift) => shift.date === today && isSickShift(shift))) {
+          if (allCalendarShifts.some((shift) => shift.date === today && isAbsenceShift(shift))) {
             setAutoTrackSession(null);
             return;
           }
 
           const todayShifts = allCalendarShifts
-            .filter((shift) => shift.date === today && !isSickShift(shift))
+            .filter((shift) => shift.date === today && !isAbsenceShift(shift))
             .sort((a, b) => a.startTime.localeCompare(b.startTime));
 
           if (todayShifts.length === 0) {
@@ -1348,19 +1430,31 @@
           },
           [calendarShifts, importedCalendarShifts],
         );
-        const sickDateSet = useMemo(
-          () => new Set(allCalendarShifts.filter(isSickShift).map((shift) => shift.date)),
-          [allCalendarShifts],
-        );
+        const absenceKindByDate = useMemo(() => {
+          const next = new Map();
+          allCalendarShifts.forEach((shift) => {
+            if (isLeaveShift(shift) && !next.has(shift.date)) {
+              next.set(shift.date, "leave");
+            }
+            if (isSickShift(shift)) {
+              next.set(shift.date, "sick");
+            }
+          });
+          return next;
+        }, [allCalendarShifts]);
         const effectiveCalendarShifts = useMemo(
           () =>
             [
-              ...allCalendarShifts.filter((shift) => !isSickShift(shift) && !sickDateSet.has(shift.date)),
-              ...Array.from(sickDateSet).map(createSickWorkShift),
+              ...allCalendarShifts.filter(
+                (shift) => !isAbsenceShift(shift) && !absenceKindByDate.has(shift.date),
+              ),
+              ...Array.from(absenceKindByDate, ([dateValue, kind]) =>
+                kind === "sick" ? createSickWorkShift(dateValue) : createLeaveWorkShift(dateValue),
+              ),
             ].sort((a, b) =>
               `${a.date} ${a.startTime}`.localeCompare(`${b.date} ${b.startTime}`),
             ),
-          [allCalendarShifts, sickDateSet],
+          [absenceKindByDate, allCalendarShifts],
         );
 
         const calculateStoredDayPrefill = React.useCallback(
@@ -1395,7 +1489,7 @@
           if (!user) return;
 
           if (isLocalMode) {
-            writeLocalState({ session, weeklyStats, calendarShifts, ...nextState });
+            writeLocalState({ session, weeklyStats, calendarShifts, monthlyVoucherOverrides, ...nextState });
             return;
           }
 
@@ -1434,8 +1528,10 @@
           cumulativeWeeklyHours = cumulativeRegularScopeHours,
           regularThreshold = WEEKLY_GOAL_HOURS,
         ) => {
-          if (cumulativeWeeklyHours >= FULL_TIME_WEEKLY_HOURS) return "S25";
-          if (cumulativeRegularScopeHours >= regularThreshold) {
+          if (cumulativeWeeklyHours + HOURS_EPSILON >= FULL_TIME_WEEKLY_HOURS) {
+            return isNightShift(date) ? "S45" : "S25";
+          }
+          if (cumulativeRegularScopeHours + HOURS_EPSILON >= regularThreshold) {
             return isNightShift(date) && !isSundayOrHoliday(date) ? "S50" : "S15";
           }
           return "ORD";
@@ -1457,40 +1553,74 @@
             ORD: 0,
             S15: 0,
             S25: 0,
+            S45: 0,
             S50: 0,
           };
           const step = 60000;
           const elapsed = endMs - startMs;
           const unpaidBreakMs = elapsed >= UNPAID_BREAK_THRESHOLD ? UNPAID_BREAK_DURATION : 0;
-          const payableEndMs = Math.max(startMs, endMs - unpaidBreakMs);
+          const breakEndMs = unpaidBreakMs > 0 ? startMs + elapsed / 2 : null;
+          const breakStartMs = breakEndMs === null ? null : breakEndMs - unpaidBreakMs;
+          const payableDurationHours = Math.max(0, elapsed - unpaidBreakMs) / 3600000;
+          const weeklyOvertimeBefore = Math.max(0, weeklyHoursBefore - FULL_TIME_WEEKLY_HOURS);
+          const weeklyOvertimeAfter = Math.max(
+            0,
+            weeklyHoursBefore + payableDurationHours - FULL_TIME_WEEKLY_HOURS,
+          );
+          const weeklyOvertimeHoursForShift = Math.min(
+            payableDurationHours,
+            Math.max(0, weeklyOvertimeAfter - weeklyOvertimeBefore),
+          );
+          let paidHoursSoFar = 0;
+          let regularScopeHoursSoFar = 0;
           let curr = startMs;
 
-          while (curr < payableEndMs) {
-            const next = Math.min(curr + step, payableEndMs);
-            const hours = (next - curr) / 3600000;
+          while (curr < endMs) {
+            const next = Math.min(curr + step, endMs);
+            const breakOverlapMs =
+              breakStartMs === null
+                ? 0
+                : Math.max(0, Math.min(next, breakEndMs) - Math.max(curr, breakStartMs));
+            const paidStepMs = next - curr - breakOverlapMs;
+            if (paidStepMs <= 0) {
+              curr = next;
+              continue;
+            }
+
+            const hours = paidStepMs / 3600000;
             const d = new Date(curr);
-            const paidHoursSoFar = (curr - startMs) / 3600000;
-            const payCode = getAutomaticPayCode(
-              d,
-              regularScopeHoursBefore + paidHoursSoFar,
-              weeklyHoursBefore + paidHoursSoFar,
-              regularThreshold,
-            );
+            const isAllocatedWeeklyOvertime =
+              paidHoursSoFar + HOURS_EPSILON < weeklyOvertimeHoursForShift;
+            const payCode = isAllocatedWeeklyOvertime
+              ? isNightShift(d)
+                ? "S45"
+                : "S25"
+              : regularScopeHoursBefore + regularScopeHoursSoFar + HOURS_EPSILON >= regularThreshold
+                ? isNightShift(d) && !isSundayOrHoliday(d)
+                  ? "S50"
+                  : "S15"
+                : "ORD";
             const payCodeDetails = getPayCode(payCode);
             payCodeTotals[payCode] += hours;
             base += hours * BASE_RATE * payCodeDetails.multiplier;
-            if (isNightShift(d) && isSundayOrHoliday(d)) {
+            if (payCode === "ORD") {
+              regularScopeHoursSoFar += hours;
+            }
+            if (isNightShift(d) && payCode === "S45") {
+              // The 145% overtime rate already includes the night premium.
+            } else if (isNightShift(d) && isSundayOrHoliday(d)) {
               nightSundayHolidayExtra += hours * (BASE_RATE * NIGHT_SUNDAY_HOLIDAY_BONUS_FRACTION);
               nightSundayHolidayHours += hours;
             } else if (isNightShift(d) && payCode !== "S50") {
               nightWeekdayExtra += hours * (BASE_RATE * NIGHT_WEEKDAY_BONUS_FRACTION);
               nightWeekdayHours += hours;
             }
+            paidHoursSoFar += hours;
             curr = next;
           }
 
           const mealVoucher = elapsed >= MEAL_VOUCHER_THRESHOLD ? MEAL_VOUCHER_AMOUNT : 0;
-          const paidElapsed = Math.max(0, elapsed - unpaidBreakMs);
+          const paidElapsed = paidHoursSoFar * 3600000;
           const nightExtra = nightWeekdayExtra + nightSundayHolidayExtra;
           const total = base + nightExtra;
           return {
@@ -1506,6 +1636,8 @@
             elapsed,
             paidElapsed,
             unpaidBreakMs,
+            leaveHours: 0,
+            sickHours: 0,
           };
         };
 
@@ -1514,9 +1646,12 @@
           nightWeekdayHours,
           nightSundayHolidayHours,
           workedDays,
+          leaveDays,
+          holidayRestDays,
           parkingDeduction,
+          unionDuesEnabled,
         }) => {
-          if (workedDays === 0) {
+          if (workedDays === 0 && leaveDays === 0 && holidayRestDays === 0) {
             return {
               net: 0,
               netPlusVouchers: 0,
@@ -1528,17 +1663,30 @@
             };
           }
 
-          const regularPay = roundCurrency(payCodeTotals.ORD * PAYSLIP_REGULAR_HOURLY_RATE);
+          const regularPay = PAYSLIP_MONTHLY_BASE;
           const s15Pay = roundCurrency(payCodeTotals.S15 * PAYSLIP_S15_RATE);
           const s50Pay = roundCurrency(payCodeTotals.S50 * PAYSLIP_S50_RATE);
           const s25Pay = roundCurrency(payCodeTotals.S25 * PAYSLIP_S25_RATE);
+          const s45Pay = roundCurrency(payCodeTotals.S45 * PAYSLIP_S45_RATE);
           const nttPay = roundCurrency(nightWeekdayHours * PAYSLIP_NTT_RATE);
           const ntdPay = roundCurrency(nightSundayHolidayHours * PAYSLIP_NTD_RATE);
           const shiftAllowance = roundCurrency(workedDays * PAYSLIP_SHIFT_ALLOWANCE_RATE);
           const dailyTurnistaAllowance = roundCurrency(workedDays * PAYSLIP_DAILY_TURNISTA_RATE);
           const campoAllowance = roundCurrency(workedDays * PAYSLIP_CAMPO_RATE);
+          const holidayRestPay = roundCurrency(holidayRestDays * PAYSLIP_HOLIDAY_REST_RATE);
+          const leaveAllowance = roundCurrency(leaveDays * PAYSLIP_LEAVE_DAY_ALLOWANCE_RATE);
           const variablePay = roundCurrency(
-            shiftAllowance + dailyTurnistaAllowance + campoAllowance + s15Pay + s50Pay + s25Pay + nttPay + ntdPay,
+            shiftAllowance +
+              dailyTurnistaAllowance +
+              campoAllowance +
+              holidayRestPay +
+              leaveAllowance +
+              s15Pay +
+              s50Pay +
+              s25Pay +
+              s45Pay +
+              nttPay +
+              ntdPay,
           );
           const grossPayroll = roundCurrency(regularPay + variablePay);
           const contributionBase = Math.floor(grossPayroll);
@@ -1546,14 +1694,16 @@
           const ivs = roundCurrency(contributionBase * PAYSLIP_IVS_RATE);
           const fis = roundCurrency(contributionBase * PAYSLIP_FIS_RATE);
           const cigs = roundCurrency(contributionBase * PAYSLIP_CIGS_RATE);
+          const unionDues = unionDuesEnabled ? roundCurrency(PAYSLIP_MONTHLY_BASE * PAYSLIP_UNION_DUES_RATE) : 0;
           const substituteTaxable = roundCurrency(variablePay * PAYSLIP_SUBSTITUTE_TAXABLE_VARIABLE_FRACTION);
           const substituteTax = roundCurrency(substituteTaxable * PAYSLIP_SUBSTITUTE_TAX_RATE);
           const irpefTaxable = roundCurrency(grossPayroll - fondoTrasporto - ivs - fis - cigs - substituteTaxable);
           const irpefGross = roundCurrency(irpefTaxable * PAYSLIP_IRPEF_RATE);
           const irpefWithheld = Math.max(0, roundCurrency(irpefGross - PAYSLIP_EMPLOYEE_DEDUCTION));
-          const totalCredits = roundCurrency(PAYSLIP_TRATTAMENTO_INTEGRATIVO + PAYSLIP_L207_INDEMNITY);
+          const l207Indemnity = roundCurrency(irpefTaxable * PAYSLIP_L207_INDEMNITY_RATE);
+          const totalCredits = roundCurrency(PAYSLIP_TRATTAMENTO_INTEGRATIVO + l207Indemnity);
           const totalDeductions = roundCurrency(
-            parkingDeduction + fondoTrasporto + ivs + fis + cigs + substituteTax + irpefWithheld,
+            parkingDeduction + unionDues + fondoTrasporto + ivs + fis + cigs + substituteTax + irpefWithheld,
           );
           const net = roundCurrency(grossPayroll + totalCredits - totalDeductions + PAYSLIP_ROUNDING);
 
@@ -1562,12 +1712,22 @@
             grossPayroll,
             regularPay,
             variablePay,
+            s15Pay,
+            s25Pay,
+            s45Pay,
+            s50Pay,
+            nttPay,
+            ntdPay,
+            holidayRestPay,
+            leaveAllowance,
             totalCredits,
             totalDeductions,
             irpefTaxable,
             substituteTaxable,
             irpefWithheld,
             substituteTax,
+            unionDues,
+            l207Indemnity,
             socialContributions: roundCurrency(fondoTrasporto + ivs + fis + cigs),
           };
         };
@@ -1687,6 +1847,19 @@
           regularThreshold = WEEKLY_GOAL_HOURS,
         ) => {
           const { start, end } = getShiftRange(shift.date, shift.startTime, shift.endTime);
+          if (isAbsenceShift(shift)) {
+            const elapsed = end.getTime() - start.getTime();
+            const hours = elapsed / 3600000;
+            return {
+              ...createEmptyBreakdown(),
+              total: hours * BASE_RATE,
+              base: hours * BASE_RATE,
+              elapsed,
+              paidElapsed: elapsed,
+              leaveHours: isLeaveShift(shift) ? hours : 0,
+              sickHours: isSickShift(shift) ? hours : 0,
+            };
+          }
           return calculateBreakdown(
             start.getTime(),
             end.getTime(),
@@ -1708,6 +1881,7 @@
           writeLocalSettings({
             googleCalendarIcsUrl: googleCalendarIcsUrl.trim(),
             paysForParking,
+            paysUnionDues,
             darkTheme,
           });
           setSettingsStatus("Impostazioni salvate in questo browser");
@@ -1718,6 +1892,7 @@
           writeLocalSettings({
             googleCalendarIcsUrl: "",
             paysForParking,
+            paysUnionDues,
             darkTheme,
           });
           setSettingsStatus("URL iCal rimosso da questo browser");
@@ -2018,7 +2193,7 @@
         };
 
         const updateCalendarShiftTime = async (shift, field, value) => {
-          if (!shift || isSickShift(shift)) return;
+          if (!shift || isAbsenceShift(shift)) return;
           const editableShift = getEditableCalendarShift(shift);
           const nextShift = {
             ...editableShift,
@@ -2066,6 +2241,41 @@
           await saveState({ calendarShifts: nextShifts });
         };
 
+        const setCalendarDayStatus = async (dateValue, kind) => {
+          if (!user || !dateValue) return;
+          const nextShifts = calendarShifts.filter(
+            (shift) => !(shift.date === dateValue && isAbsenceShift(shift)),
+          );
+          if (kind === "leave" || kind === "sick") {
+            nextShifts.push({
+              id: `local-${kind}-${dateValue}`,
+              kind,
+              source: "local",
+              date: dateValue,
+              startTime: "00:00",
+              endTime: "00:00",
+              note: kind === "leave" ? "Ferie" : "Malattia",
+            });
+          }
+          nextShifts.sort((a, b) =>
+            `${a.date} ${a.startTime}`.localeCompare(`${b.date} ${b.startTime}`),
+          );
+          setCalendarShifts(nextShifts);
+          setExpandedCalendarShiftId(null);
+          await saveState({ calendarShifts: nextShifts });
+        };
+
+        const setMonthlyVoucherOverride = async (value) => {
+          const nextOverrides = { ...monthlyVoucherOverrides };
+          if (value === "") {
+            delete nextOverrides[calendarMonth];
+          } else {
+            nextOverrides[calendarMonth] = Math.max(0, Math.round(Number(value) || 0));
+          }
+          setMonthlyVoucherOverrides(nextOverrides);
+          await saveState({ monthlyVoucherOverrides: nextOverrides });
+        };
+
         const getShiftBreakdownEntry = (shift) => {
           const monthlyEntry = monthlyShiftBreakdowns.find((entry) => entry.shift.id === shift.id);
           if (monthlyEntry) return monthlyEntry;
@@ -2083,7 +2293,7 @@
               entries: [],
               aggregate: createEmptyBreakdown(),
               totalWithVoucher: 0,
-              payCodeTotals: { ORD: 0, S15: 0, S25: 0, S50: 0 },
+              payCodeTotals: { ORD: 0, S15: 0, S25: 0, S45: 0, S50: 0 },
             };
           }
 
@@ -2097,7 +2307,7 @@
               });
               return acc;
             },
-            { ORD: 0, S15: 0, S25: 0, S50: 0 },
+            { ORD: 0, S15: 0, S25: 0, S45: 0, S50: 0 },
           );
 
           return { entries, aggregate, totalWithVoucher, payCodeTotals };
@@ -2139,6 +2349,18 @@
             </svg>
           </span>
         );
+        const renderLeaveIcon = (className = "h-4 w-4") => (
+          <span
+            aria-hidden="true"
+            className={`inline-flex items-center justify-center rounded border border-sky-300/35 bg-sky-500/10 text-sky-100 ${className}`}
+          >
+            <svg width="13" height="13" viewBox="0 0 16 16" fill="none">
+              <path d="M2.5 7.2A5.6 5.6 0 0 1 8 2a5.6 5.6 0 0 1 5.5 5.2H2.5Z" stroke="currentColor" strokeWidth="1.4" />
+              <path d="M8 7.2v5.2c0 .9-.5 1.6-1.4 1.6-.7 0-1.2-.4-1.4-1" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" />
+              <path d="M4.3 7.2c.3-.8.9-1.3 1.6-1.3.8 0 1.4.5 1.7 1.3M8.4 7.2c.3-.8.9-1.3 1.7-1.3.7 0 1.3.5 1.6 1.3" stroke="currentColor" strokeWidth="1.1" />
+            </svg>
+          </span>
+        );
 
         const buildMonthlyMarkdown = () => {
           const monthLabel = `${MONTH_OPTIONS[Number(calendarMonth.slice(5, 7)) - 1]} ${calendarMonth.slice(0, 4)}`;
@@ -2146,11 +2368,17 @@
             ["Net + vouchers", formatEuro(monthlyPrediction.total)],
             ["Payslip net estimate", formatEuro(monthlyPrediction.payslipNetEstimate.net)],
             ["Paid hours", `${(monthlyPrediction.paidElapsed / 3600000).toFixed(1)} h`],
+            ["Worked hours", `${(monthlyPrediction.workedPaidElapsed / 3600000).toFixed(1)} h`],
+            ["Ferie", `${monthlyPrediction.leaveHours.toFixed(1)} h`],
+            ["Malattia", `${monthlyPrediction.sickHours.toFixed(1)} h`],
             ["Shift earnings", formatEuro(monthlyPrediction.earningsTotal)],
             ["Parking", `-${formatEuro(monthlyPrediction.parkingDeduction).replace("EUR ", "EUR ")}`],
             ["After parking", formatEuro(monthlyPrediction.incomeAfterParking)],
             ["Payroll gross", formatEuro(monthlyPrediction.payslipNetEstimate.grossPayroll)],
             ["Food vouchers", formatEuro(monthlyPrediction.foodVouchers)],
+            ["Festività in riposo", `${monthlyPrediction.holidayRestDates.length} gg`],
+            ["Pagamento festività in riposo", formatEuro(monthlyPrediction.payslipNetEstimate.holidayRestPay || 0)],
+            ["Indennità ferie", formatEuro(monthlyPrediction.payslipNetEstimate.leaveAllowance || 0)],
             ["Ore notturne", `${getTotalNightHours(monthlyPrediction).toFixed(2)} h`],
             ...Object.entries(monthlyPrediction.payCodeTotals)
               .filter(([, hours]) => hours > 0)
@@ -2165,6 +2393,7 @@
               ? [["Pausa pranzo", `-${monthlyPrediction.unpaidBreakMs / 60000} min`]]
               : []),
             ["Payroll deductions", `-${formatEuro(monthlyPrediction.payslipNetEstimate.totalDeductions)}`],
+            ["Trattenuta sindacale", `-${formatEuro(monthlyPrediction.payslipNetEstimate.unionDues || 0)}`],
             ["Payroll credits", `+${formatEuro(monthlyPrediction.payslipNetEstimate.totalCredits)}`],
           ];
 
@@ -2173,7 +2402,8 @@
                 "| Data | Orario | Nota | Importo |",
                 "| --- | --- | --- | ---: |",
                 ...monthlyShiftBreakdowns.map(({ shift, totalWithVoucher }) => {
-                  return `| ${new Date(`${shift.date}T00:00:00`).toLocaleDateString("it-IT")} | ${shift.startTime}-${shift.endTime} | ${shift.note || "—"} | ${formatEuro(totalWithVoucher)} |`;
+                  const timeLabel = isAbsenceShift(shift) ? (isLeaveShift(shift) ? "FERIE" : "MALATTIA") : `${shift.startTime}-${shift.endTime}`;
+                  return `| ${new Date(`${shift.date}T00:00:00`).toLocaleDateString("it-IT")} | ${timeLabel} | ${shift.note || "—"} | ${formatEuro(totalWithVoucher)} |`;
                 }),
               ].join("\n")
             : "_Nessun turno salvato per questo mese._";
@@ -2273,7 +2503,9 @@
               .filter((shift) => shift.date === dateValue)
               .sort((a, b) => a.startTime.localeCompare(b.startTime));
             const sickShifts = shifts.filter(isSickShift);
+            const leaveShifts = shifts.filter(isLeaveShift);
             const isSick = sickShifts.length > 0;
+            const isLeave = leaveShifts.length > 0;
             const summary = shifts.reduce(
               (acc, shift) => {
                 const breakdown = calculateShiftBreakdown(shift, 0, 0);
@@ -2298,6 +2530,7 @@
               displayHours: summary.displayHours,
               hasNightShift: summary.hasNightShift,
               isSick,
+              isLeave,
             };
           });
         }, [calendarMonth, effectiveCalendarShifts]);
@@ -2316,12 +2549,40 @@
             setExpandedCalendarShiftId(firstShiftId || null);
           }
         }, [selectedCalendarDay]);
+        const monthlyPaidAbsenceHours = useMemo(
+          () =>
+            monthlyShifts
+              .filter(isAbsenceShift)
+              .reduce((sum, shift) => {
+                const { start, end } = getShiftRange(shift.date, shift.startTime, shift.endTime);
+                return sum + (end.getTime() - start.getTime()) / 3600000;
+              }, 0),
+          [monthlyShifts],
+        );
+        const monthlyOrdinaryWorkThreshold = Math.max(
+          0,
+          MONTHLY_ORDINARY_HOURS - monthlyPaidAbsenceHours,
+        );
+        const holidayRestDates = useMemo(
+          () =>
+            calendarDays
+              .filter(
+                (day) =>
+                  day.inMonth &&
+                  day.date.getDay() !== 0 &&
+                  Boolean(getHoliday(day.date)) &&
+                  day.shifts.length === 0,
+              )
+              .map((day) => day.dateValue),
+          [calendarDays],
+        );
         const monthlyPrediction = useMemo(() => {
           const weeklyHoursByKey = {};
-          const payCodeTotals = { ORD: 0, S15: 0, S25: 0, S50: 0 };
+          const payCodeTotals = { ORD: 0, S15: 0, S25: 0, S45: 0, S50: 0 };
           let total = 0;
-          let monthlyPaidHoursBefore = 0;
+          let monthlyWorkedHoursBefore = 0;
           let paidElapsed = 0;
+          let workedPaidElapsed = 0;
           let elapsed = 0;
           let nightWeekdayExtra = 0;
           let nightSundayHolidayExtra = 0;
@@ -2329,18 +2590,25 @@
           let nightSundayHolidayHours = 0;
           let unpaidBreakMs = 0;
           let foodVouchers = 0;
-          const workedDays = new Set(monthlyShifts.map((shift) => shift.date)).size;
+          let leaveHours = 0;
+          let sickHours = 0;
+          const workedDays = new Set(monthlyShifts.filter((shift) => !isAbsenceShift(shift)).map((shift) => shift.date)).size;
+          const leaveDays = new Set(monthlyShifts.filter(isLeaveShift).map((shift) => shift.date)).size;
+          const sickDays = new Set(monthlyShifts.filter(isSickShift).map((shift) => shift.date)).size;
 
           for (const shift of monthlyShifts) {
             const weekKey = getWeekKey(shift.date);
             const breakdown = calculateShiftBreakdown(
               shift,
-              monthlyPaidHoursBefore,
+              monthlyWorkedHoursBefore,
               weeklyHoursByKey[weekKey] || 0,
-              MONTHLY_ORDINARY_HOURS,
+              monthlyOrdinaryWorkThreshold,
             );
-            monthlyPaidHoursBefore += breakdown.paidElapsed / 3600000;
-            weeklyHoursByKey[weekKey] = (weeklyHoursByKey[weekKey] || 0) + breakdown.paidElapsed / 3600000;
+            if (!isAbsenceShift(shift)) {
+              monthlyWorkedHoursBefore += breakdown.payCodeTotals.ORD;
+              workedPaidElapsed += breakdown.paidElapsed;
+              weeklyHoursByKey[weekKey] = (weeklyHoursByKey[weekKey] || 0) + breakdown.paidElapsed / 3600000;
+            }
             total += breakdown.total;
             paidElapsed += breakdown.paidElapsed;
             elapsed += breakdown.elapsed;
@@ -2350,11 +2618,19 @@
             nightSundayHolidayHours += breakdown.nightSundayHolidayHours;
             unpaidBreakMs += breakdown.unpaidBreakMs;
             foodVouchers += breakdown.mealVoucher;
+            leaveHours += breakdown.leaveHours;
+            sickHours += breakdown.sickHours;
             for (const [code, hours] of Object.entries(breakdown.payCodeTotals)) {
               payCodeTotals[code] += hours;
             }
           }
 
+          const automaticFoodVouchers = foodVouchers;
+          const voucherOverrideCount = monthlyVoucherOverrides[calendarMonth];
+          if (Number.isFinite(voucherOverrideCount)) {
+            foodVouchers = voucherOverrideCount * MEAL_VOUCHER_AMOUNT;
+          }
+          const effectiveHolidayRestDates = monthlyShifts.length > 0 ? holidayRestDates : [];
           const earningsTotal = total;
           const parkingDeduction = monthlyShifts.length > 0 && paysForParking ? MONTHLY_PARKING_DEDUCTION : 0;
           const incomeAfterParking = Math.max(0, earningsTotal - parkingDeduction);
@@ -2363,7 +2639,10 @@
             nightWeekdayHours,
             nightSundayHolidayHours,
             workedDays,
+            leaveDays,
+            holidayRestDays: effectiveHolidayRestDates.length,
             parkingDeduction,
+            unionDuesEnabled: paysUnionDues,
           });
           const totalWithVouchers = payslipNetEstimate.net + foodVouchers;
           return {
@@ -2372,32 +2651,51 @@
             earningsTotal,
             parkingDeduction,
             foodVouchers,
+            automaticFoodVouchers,
+            voucherOverrideCount,
             payslipNetEstimate,
             paidElapsed,
+            workedPaidElapsed,
             elapsed,
             nightWeekdayExtra,
             nightSundayHolidayExtra,
             nightWeekdayHours,
             nightSundayHolidayHours,
             unpaidBreakMs,
+            leaveHours,
+            sickHours,
+            leaveDays,
+            sickDays,
+            holidayRestDates: effectiveHolidayRestDates,
+            ordinaryWorkThreshold: monthlyOrdinaryWorkThreshold,
             payCodeTotals,
           };
-        }, [monthlyShifts, paysForParking]);
+        }, [
+          holidayRestDates,
+          monthlyOrdinaryWorkThreshold,
+          monthlyShifts,
+          monthlyVoucherOverrides,
+          calendarMonth,
+          paysForParking,
+          paysUnionDues,
+        ]);
         const monthlyShiftBreakdowns = useMemo(() => {
           const weeklyHoursByKey = {};
-          let monthlyPaidHoursBefore = 0;
+          let monthlyWorkedHoursBefore = 0;
 
           return monthlyShifts.map((shift) => {
             const weekKey = getWeekKey(shift.date);
             const breakdown = calculateShiftBreakdown(
               shift,
-              monthlyPaidHoursBefore,
+              monthlyWorkedHoursBefore,
               weeklyHoursByKey[weekKey] || 0,
-              MONTHLY_ORDINARY_HOURS,
+              monthlyOrdinaryWorkThreshold,
             );
 
-            monthlyPaidHoursBefore += breakdown.paidElapsed / 3600000;
-            weeklyHoursByKey[weekKey] = (weeklyHoursByKey[weekKey] || 0) + breakdown.paidElapsed / 3600000;
+            if (!isAbsenceShift(shift)) {
+              monthlyWorkedHoursBefore += breakdown.payCodeTotals.ORD;
+              weeklyHoursByKey[weekKey] = (weeklyHoursByKey[weekKey] || 0) + breakdown.paidElapsed / 3600000;
+            }
 
             return {
               shift,
@@ -2405,7 +2703,7 @@
               totalWithVoucher: breakdown.total + breakdown.mealVoucher,
             };
           });
-        }, [monthlyShifts]);
+        }, [monthlyOrdinaryWorkThreshold, monthlyShifts]);
         const selectedDayPreviewData = useMemo(
           () => getDayPreviewData(selectedCalendarDay),
           [monthlyShiftBreakdowns, selectedCalendarDay],
@@ -2488,12 +2786,15 @@
             .map((day) => day.total);
           return workedDayTotals.length > 0 ? Math.min(...workedDayTotals) : 0;
         }, [calendarDays]);
-        const getCalendarCardClasses = (isSelected, hasShift, isSick) => {
+        const getCalendarCardClasses = (isSelected, hasShift, isSick, isLeave = false) => {
           if (isSelected) {
             return "themed-active themed-shadow";
           }
           if (isSick) {
             return "border-rose-300/25 bg-rose-500/[0.06] hover:border-rose-200/40";
+          }
+          if (isLeave) {
+            return "border-sky-300/25 bg-sky-500/[0.06] hover:border-sky-200/40";
           }
           if (!hasShift) {
             return "border-white/5 bg-white/[0.015] hover:border-white/10";
@@ -2543,6 +2844,7 @@
           ORD: PAYSLIP_REGULAR_HOURLY_RATE,
           S15: PAYSLIP_S15_RATE,
           S25: PAYSLIP_S25_RATE,
+          S45: PAYSLIP_S45_RATE,
           S50: PAYSLIP_S50_RATE,
         };
         const liveNightExtraRate = isNightShift(currentTime)
@@ -2552,13 +2854,15 @@
           : 0;
         const liveRate =
           (liveBaseRateByCode[livePayCode] || PAYSLIP_REGULAR_HOURLY_RATE) +
-          (isNightShift(currentTime) && livePayCode !== "S50" ? liveNightExtraRate : 0);
+          (isNightShift(currentTime) && livePayCode !== "S50" && livePayCode !== "S45" ? liveNightExtraRate : 0);
         const activeTheme = DARK_THEMES[darkTheme] || DARK_THEMES.classic;
         const renderCalendarShiftEditor = (shift, entry, compact = false) => {
           const isExpanded = expandedCalendarShiftId === shift.id;
           const breakdown = entry.breakdown;
           const isSick = isSickShift(shift);
-          const isOvernight = !isSick && shift.endTime <= shift.startTime;
+          const isLeave = isLeaveShift(shift);
+          const isAbsence = isSick || isLeave;
+          const isOvernight = !isAbsence && shift.endTime <= shift.startTime;
           const nightHours = breakdown.nightWeekdayHours + breakdown.nightSundayHolidayHours;
 
           return (
@@ -2579,8 +2883,9 @@
                 <div className="min-w-0">
                   <div className="flex flex-wrap items-center gap-2">
                     {isSick && renderSickIcon("h-5 w-5")}
+                    {isLeave && renderLeaveIcon("h-5 w-5")}
                     <span className="text-sm font-black text-white">
-                      {isSick ? "Malattia" : `${shift.startTime}-${shift.endTime}`}
+                      {isSick ? "Malattia" : isLeave ? "Ferie" : `${shift.startTime}-${shift.endTime}`}
                     </span>
                     {isOvernight && (
                       <span className="rounded border border-violet-300/25 bg-violet-500/10 px-2 py-0.5 text-[9px] font-black uppercase tracking-widest text-violet-200">
@@ -2601,9 +2906,9 @@
               </button>
               {isExpanded && (
                 <div className={`border-t border-white/10 ${compact ? "p-2.5" : "p-3"}`}>
-                  {isSick ? (
-                    <p className="text-xs font-bold text-rose-100/80">
-                      Conteggio placeholder: 6h ordinarie, dalle {SICK_SHIFT_START} alle {SICK_SHIFT_END}.
+                  {isAbsence ? (
+                    <p className={`text-xs font-bold ${isSick ? "text-rose-100/80" : "text-sky-100/80"}`}>
+                      Conteggio: 6h pagate, dalle {shift.startTime} alle {shift.endTime}.
                     </p>
                   ) : (
                     <div className="grid grid-cols-2 gap-2 sm:gap-3">
@@ -2656,7 +2961,7 @@
                       </span>
                     )}
                   </div>
-                  {shift.source === "local" && (
+                  {shift.source === "local" && !isAbsence && (
                     <button
                       type="button"
                       onClick={() => deleteCalendarShift(shift)}
@@ -2667,6 +2972,35 @@
                   )}
                 </div>
               )}
+            </div>
+          );
+        };
+        const renderDayStatusControls = (dateValue) => {
+          const currentStatus = absenceKindByDate.get(dateValue) || "work";
+          return (
+            <div className="grid grid-cols-3 gap-2">
+              {[
+                { key: "work", label: "Lavoro" },
+                { key: "leave", label: "Ferie" },
+                { key: "sick", label: "Malattia" },
+              ].map((option) => (
+                <button
+                  key={option.key}
+                  type="button"
+                  onClick={() => setCalendarDayStatus(dateValue, option.key === "work" ? null : option.key)}
+                  className={`rounded border px-2 py-2 text-[9px] font-black uppercase tracking-widest transition ${
+                    currentStatus === option.key
+                      ? option.key === "sick"
+                        ? "border-rose-300/35 bg-rose-500/12 text-rose-100"
+                        : option.key === "leave"
+                          ? "border-sky-300/35 bg-sky-500/12 text-sky-100"
+                          : "themed-active"
+                      : "border-white/10 bg-black/20 text-zinc-400 hover:text-white"
+                  }`}
+                >
+                  {option.label}
+                </button>
+              ))}
             </div>
           );
         };
@@ -2897,6 +3231,33 @@
                                 onClick={() => setPaysForParking(false)}
                                 className={`rounded border px-3 py-3 text-[10px] font-black uppercase tracking-widest transition ${
                                   !paysForParking
+                                    ? "themed-active"
+                                    : "border-white/10 text-zinc-300 hover:text-white"
+                                }`}
+                              >
+                                No
+                              </button>
+                            </div>
+                          </div>
+                          <div>
+                            <span className="mb-2 block text-[10px] font-bold uppercase tracking-widest text-zinc-500">
+                              Trattenuta sindacale?
+                            </span>
+                            <div className="grid grid-cols-2 gap-2">
+                              <button
+                                onClick={() => setPaysUnionDues(true)}
+                                className={`rounded border px-3 py-3 text-[10px] font-black uppercase tracking-widest transition ${
+                                  paysUnionDues
+                                    ? "themed-active"
+                                    : "border-white/10 text-zinc-300 hover:text-white"
+                                }`}
+                              >
+                                Si
+                              </button>
+                              <button
+                                onClick={() => setPaysUnionDues(false)}
+                                className={`rounded border px-3 py-3 text-[10px] font-black uppercase tracking-widest transition ${
+                                  !paysUnionDues
                                     ? "themed-active"
                                     : "border-white/10 text-zinc-300 hover:text-white"
                                 }`}
@@ -3374,11 +3735,12 @@
                                   const hasShift = day.shifts.length > 0;
                                   const hasNightShift = day.hasNightShift;
                                   const isSick = day.isSick;
+                                  const isLeave = day.isLeave;
                                   const startsWeek = day.date.getDay() === 1 && index > 0;
                                   return (
                                     <div
                                       key={day.dateValue}
-                                      className={`w-full overflow-hidden rounded border text-left align-top transition ${getCalendarCardClasses(isSelected, hasShift, isSick)} ${startsWeek ? "mt-4" : ""}`}
+                                      className={`w-full overflow-hidden rounded border text-left align-top transition ${getCalendarCardClasses(isSelected, hasShift, isSick, isLeave)} ${startsWeek ? "mt-4" : ""}`}
                                     >
                                       <button
                                         type="button"
@@ -3404,6 +3766,18 @@
                                                 <>
                                                   {renderSickIcon("h-4 w-4")}
                                                   <span className="text-rose-200">Malattia</span>
+                                                  <span
+                                                    className={`inline-flex items-center rounded border px-1.5 py-0.5 text-[10px] font-black normal-case tracking-normal ${getDurationChipClasses(
+                                                      day.displayHours,
+                                                    )}`}
+                                                  >
+                                                    {day.displayHours.toFixed(1)}h
+                                                  </span>
+                                                </>
+                                              ) : isLeave ? (
+                                                <>
+                                                  {renderLeaveIcon("h-4 w-4")}
+                                                  <span className="text-sky-200">Ferie</span>
                                                   <span
                                                     className={`inline-flex items-center rounded border px-1.5 py-0.5 text-[10px] font-black normal-case tracking-normal ${getDurationChipClasses(
                                                       day.displayHours,
@@ -3446,14 +3820,16 @@
                                               <div className="text-[10px] font-bold uppercase tracking-widest mt-1 text-zinc-400">
                                                 {isSick
                                                   ? "Malattia"
+                                                  : isLeave
+                                                    ? "Ferie"
                                                   : `${day.shifts.length} turno${day.shifts.length === 1 ? "" : "i"}`}
                                               </div>
                                             </div>
                                           )}
                                         </div>
-                                        {isSick ? (
-                                          <div className="mt-3 text-[11px] font-bold text-rose-100/80">
-                                            Conteggio standard malattia: 6h ordinarie.
+                                        {isSick || isLeave ? (
+                                          <div className={`mt-3 text-[11px] font-bold ${isSick ? "text-rose-100/80" : "text-sky-100/80"}`}>
+                                            Conteggio standard {isSick ? "malattia" : "ferie"}: 6h pagate.
                                           </div>
                                         ) : hasShift && !isSelected ? (
                                           <div className="mt-3 space-y-1">
@@ -3467,6 +3843,7 @@
                                       </button>
                                       {isSelected && (
                                         <div className="space-y-2 border-t border-white/10 bg-black/20 p-2.5">
+                                          {renderDayStatusControls(day.dateValue)}
                                           {hasShift
                                             ? day.shifts.map((shift) => {
                                                 const entry =
@@ -3497,6 +3874,7 @@
                                 const hasShift = day.shifts.length > 0;
                                 const hasNightShift = day.hasNightShift;
                                 const isSick = day.isSick;
+                                const isLeave = day.isLeave;
                                 return (
                                   <button
                                     key={day.dateValue}
@@ -3506,13 +3884,24 @@
                                     onPointerUp={handleCalendarDayPointerEnd}
                                     onPointerLeave={handleCalendarDayPointerEnd}
                                     onPointerCancel={handleCalendarDayPointerEnd}
-                                    className={`min-h-24 rounded border p-2 text-left align-top transition ${getCalendarCardClasses(isSelected, hasShift, isSick)} ${day.inMonth ? "opacity-100" : "opacity-35"}`}
+                                    className={`min-h-24 rounded border p-2 text-left align-top transition ${getCalendarCardClasses(isSelected, hasShift, isSick, isLeave)} ${day.inMonth ? "opacity-100" : "opacity-35"}`}
                                   >
                                     <div className="flex items-start justify-between gap-1">
                                       <span className="text-sm font-black text-white">{day.date.getDate()}</span>
                                       {isSick ? (
                                         <span className="flex items-center gap-1">
                                           {renderSickIcon("h-4 w-4")}
+                                          <span
+                                            className={`inline-flex items-center rounded border px-1.5 py-0.5 text-[9px] font-black tracking-normal ${getDurationChipClasses(
+                                              day.displayHours,
+                                            )}`}
+                                          >
+                                            {day.displayHours.toFixed(1)}h
+                                          </span>
+                                        </span>
+                                      ) : isLeave ? (
+                                        <span className="flex items-center gap-1">
+                                          {renderLeaveIcon("h-4 w-4")}
                                           <span
                                             className={`inline-flex items-center rounded border px-1.5 py-0.5 text-[9px] font-black tracking-normal ${getDurationChipClasses(
                                               day.displayHours,
@@ -3541,13 +3930,13 @@
                                         </span>
                                       )}
                                     </div>
-                                    {isSick ? (
+                                    {isSick || isLeave ? (
                                       <div className="mt-2 space-y-1">
                                         <div className="flex justify-end">
                                           <span className="h-1 w-6 rounded-full" style={getPayMarkerStyle(day.total)}></span>
                                         </div>
-                                        <div className="text-[10px] font-black uppercase tracking-tight text-rose-100/85">
-                                          Malattia
+                                        <div className={`text-[10px] font-black uppercase tracking-tight ${isSick ? "text-rose-100/85" : "text-sky-100/85"}`}>
+                                          {isSick ? "Malattia" : "Ferie"}
                                         </div>
                                         <div className={`text-[10px] font-black ${getAmountTextClasses(day.total)}`}>
                                           EUR {day.total.toFixed(2)}
@@ -3606,6 +3995,7 @@
                                 </button>
                               )}
                             </div>
+                            <div className="mt-4">{renderDayStatusControls(calendarDate)}</div>
                             {selectedCalendarDay?.shifts?.length > 0 ? (
                               <div className="mt-4 space-y-2">
                                 {selectedCalendarDay.shifts.map((shift) => {
@@ -3680,6 +4070,11 @@
                                 <p className="text-sm font-black summary-value">
                                   EUR {monthlyPrediction.foodVouchers.toFixed(2)}
                                 </p>
+                                <p className="mt-1 text-[8px] font-bold uppercase tracking-widest summary-label">
+                                  {Number.isFinite(monthlyPrediction.voucherOverrideCount)
+                                    ? `${monthlyPrediction.voucherOverrideCount} manuali`
+                                    : `${monthlyPrediction.automaticFoodVouchers / MEAL_VOUCHER_AMOUNT} automatici`}
+                                </p>
                               </div>
                               <div className="summary-card summary-night rounded p-3">
                                 <p className="text-[9px] font-black uppercase tracking-widest summary-label mb-1">
@@ -3689,6 +4084,27 @@
                                   {getTotalNightHours(monthlyPrediction).toFixed(2)}h
                                 </p>
                               </div>
+                            </div>
+                            <div className="mb-4 flex flex-col gap-2 rounded border border-white/10 bg-white/[0.025] p-3 sm:flex-row sm:items-end">
+                              <label className="flex-1 text-[9px] font-black uppercase tracking-widest text-zinc-500">
+                                Numero buoni pasto effettivi
+                                <input
+                                  type="number"
+                                  min="0"
+                                  step="1"
+                                  value={Number.isFinite(monthlyPrediction.voucherOverrideCount) ? monthlyPrediction.voucherOverrideCount : ""}
+                                  onChange={(event) => setMonthlyVoucherOverride(event.target.value)}
+                                  placeholder={`${monthlyPrediction.automaticFoodVouchers / MEAL_VOUCHER_AMOUNT} automatici`}
+                                  className="mt-2 w-full rounded border border-white/10 bg-black px-3 py-2 text-sm font-black text-white outline-none themed-focus"
+                                />
+                              </label>
+                              <button
+                                type="button"
+                                onClick={() => setMonthlyVoucherOverride("")}
+                                className="rounded border border-white/10 px-3 py-2 text-[9px] font-black uppercase tracking-widest text-zinc-400 hover:text-white"
+                              >
+                                Usa automatico
+                              </button>
                             </div>
                             <div className="flex flex-wrap gap-2">
                               {Object.entries(monthlyPrediction.payCodeTotals)
@@ -3714,6 +4130,26 @@
                               {monthlyPrediction.unpaidBreakMs > 0 && (
                                 <span className="themed-negative text-[9px] font-black px-2 py-1 rounded uppercase tracking-tight">
                                   Pausa pranzo: -{monthlyPrediction.unpaidBreakMs / 60000} min
+                                </span>
+                              )}
+                              {monthlyPrediction.leaveHours > 0 && (
+                                <span className="rounded border border-sky-300/20 bg-sky-500/[0.06] px-2 py-1 text-[9px] font-black uppercase tracking-tight text-sky-200">
+                                  Ferie: {monthlyPrediction.leaveHours.toFixed(2)}h
+                                </span>
+                              )}
+                              {monthlyPrediction.sickHours > 0 && (
+                                <span className="rounded border border-rose-300/20 bg-rose-500/[0.06] px-2 py-1 text-[9px] font-black uppercase tracking-tight text-rose-200">
+                                  Malattia: {monthlyPrediction.sickHours.toFixed(2)}h
+                                </span>
+                              )}
+                              {monthlyPrediction.holidayRestDates.length > 0 && (
+                                <span className="themed-soft text-[9px] font-black px-2 py-1 rounded uppercase tracking-tight">
+                                  Festività in riposo: {monthlyPrediction.holidayRestDates.length} gg
+                                </span>
+                              )}
+                              {monthlyPrediction.payslipNetEstimate.unionDues > 0 && (
+                                <span className="themed-negative text-[9px] font-black px-2 py-1 rounded uppercase tracking-tight">
+                                  Sindacato: -EUR {monthlyPrediction.payslipNetEstimate.unionDues.toFixed(2)}
                                 </span>
                               )}
                               <span className="themed-negative text-[9px] font-black px-2 py-1 rounded uppercase tracking-tight">
@@ -3747,6 +4183,8 @@
                                       <div className="text-[10px] font-bold uppercase tracking-widest text-zinc-500">
                                         {isSickShift(shift)
                                           ? "Conteggio malattia"
+                                          : isLeaveShift(shift)
+                                            ? "Conteggio ferie"
                                           : shift.source === "local-extracted"
                                             ? "Importato da PDF o testo"
                                             : "Importato da iCal"}
@@ -4357,7 +4795,9 @@
                           <div className="space-y-2">
                             {previewDayData.entries.map(({ shift, breakdown, totalWithVoucher }) => {
                               const isSick = isSickShift(shift);
-                              const isOvernight = !isSick && shift.endTime <= shift.startTime;
+                              const isLeave = isLeaveShift(shift);
+                              const isAbsence = isSick || isLeave;
+                              const isOvernight = !isAbsence && shift.endTime <= shift.startTime;
                               const nightHours = breakdown.nightWeekdayHours + breakdown.nightSundayHolidayHours;
                               return (
                                 <div key={shift.id} className="rounded border border-white/10 bg-white/[0.035] p-3">
@@ -4365,7 +4805,8 @@
                                     <div>
                                       <div className="flex flex-wrap items-center gap-2 text-sm font-black text-white">
                                         {isSick && renderSickIcon("h-5 w-5")}
-                                        <span>{isSick ? "Malattia" : `${shift.startTime}-${shift.endTime}`}</span>
+                                        {isLeave && renderLeaveIcon("h-5 w-5")}
+                                        <span>{isSick ? "Malattia" : isLeave ? "Ferie" : `${shift.startTime}-${shift.endTime}`}</span>
                                         {isOvernight && (
                                           <span className="rounded border border-violet-300/25 bg-violet-500/10 px-2 py-0.5 text-[9px] font-black uppercase tracking-widest text-violet-200">
                                             Conta sul giorno di inizio
