@@ -4,6 +4,7 @@
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>Calcolatore Stipendio</title>
+    <link rel="icon" href="data:," />
     <script src="https://cdn.tailwindcss.com"></script>
     <script>
       tailwind.config = {
@@ -29,6 +30,663 @@
 
       body {
         margin: 0;
+      }
+
+      button,
+      input,
+      select,
+      textarea {
+        font: inherit;
+      }
+
+      .app-root {
+        transition: background-color 220ms ease, color 220ms ease;
+      }
+
+      .modern-ui {
+        --modern-surface: rgba(28, 28, 30, 0.78);
+        --modern-surface-strong: rgba(44, 44, 46, 0.82);
+        --modern-fill: rgba(118, 118, 128, 0.18);
+        --modern-fill-hover: rgba(118, 118, 128, 0.26);
+        --modern-hairline: rgba(255, 255, 255, 0.1);
+        --modern-secondary: rgba(235, 235, 245, 0.6);
+        --modern-tertiary: rgba(235, 235, 245, 0.36);
+        color: #f5f5f7;
+      }
+
+      .modern-ui * {
+        letter-spacing: 0 !important;
+      }
+
+      .modern-ui .uppercase {
+        text-transform: none !important;
+      }
+
+      .modern-ui .font-black {
+        font-weight: 700 !important;
+      }
+
+      .modern-ui .theme-overlay {
+        display: none;
+      }
+
+      .modern-ui .app-shell {
+        max-width: 1120px;
+      }
+
+      .modern-ui .app-header {
+        position: sticky;
+        top: 12px;
+        z-index: 40;
+        margin-bottom: 34px;
+        padding: 11px 12px;
+        border: 1px solid var(--modern-hairline);
+        border-radius: 8px;
+        background: rgba(18, 18, 20, 0.78);
+        box-shadow: 0 12px 36px rgba(0, 0, 0, 0.2);
+        backdrop-filter: blur(22px) saturate(140%);
+        -webkit-backdrop-filter: blur(22px) saturate(140%);
+      }
+
+      .modern-ui .app-icon {
+        display: inline-flex;
+        width: 38px;
+        height: 38px;
+        flex: 0 0 38px;
+        align-items: center;
+        justify-content: center;
+        border-radius: 8px;
+        background: var(--theme-accent);
+        color: #050505;
+        font-size: 20px;
+        font-weight: 800;
+        box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.34);
+      }
+
+      .modern-ui .app-title {
+        font-size: 20px;
+        line-height: 1.1;
+        font-weight: 700;
+      }
+
+      .modern-ui .workspace-section {
+        min-height: 0;
+        justify-content: flex-start;
+      }
+
+      .modern-ui .workspace-surface {
+        max-width: none;
+        border: 0 !important;
+        background: transparent !important;
+        padding: 0 !important;
+        backdrop-filter: none !important;
+      }
+
+      .modern-ui .primary-nav {
+        position: sticky;
+        top: 84px;
+        z-index: 30;
+        gap: 3px;
+        margin-bottom: 28px;
+        border: 1px solid var(--modern-hairline);
+        border-radius: 8px;
+        padding: 4px;
+        background: rgba(28, 28, 30, 0.78) !important;
+        box-shadow: 0 10px 28px rgba(0, 0, 0, 0.14);
+        backdrop-filter: blur(22px) saturate(140%);
+        -webkit-backdrop-filter: blur(22px) saturate(140%);
+      }
+
+      .modern-ui .primary-nav button {
+        min-height: 44px;
+        padding: 9px 10px;
+        border-radius: 6px;
+        font-size: 12px;
+        font-weight: 600 !important;
+      }
+
+      .modern-ui .primary-nav .themed-primary {
+        background: rgba(255, 255, 255, 0.14);
+        color: white;
+        box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.05);
+      }
+
+      .modern-ui .page-title {
+        margin-bottom: 24px;
+        text-align: left;
+        font-size: 40px;
+        line-height: 1.06;
+        font-weight: 750;
+      }
+
+      .modern-ui .page-content {
+        margin-bottom: 36px;
+      }
+
+      .modern-ui .surface-panel,
+      .modern-ui .summary-panel {
+        border-color: var(--modern-hairline) !important;
+        background: var(--modern-surface) !important;
+        box-shadow: 0 14px 40px rgba(0, 0, 0, 0.16);
+      }
+
+      .modern-ui .summary-panel {
+        background: rgba(var(--theme-accent-rgb), 0.09) !important;
+      }
+
+      .modern-ui input,
+      .modern-ui select,
+      .modern-ui textarea {
+        min-height: 44px;
+        border-color: rgba(255, 255, 255, 0.1) !important;
+        border-radius: 7px;
+        background: var(--modern-fill) !important;
+        color: #f5f5f7;
+        outline: none;
+      }
+
+      .modern-ui input:focus,
+      .modern-ui select:focus,
+      .modern-ui textarea:focus {
+        border-color: rgba(var(--theme-accent-rgb), 0.65) !important;
+        box-shadow: 0 0 0 3px rgba(var(--theme-accent-rgb), 0.16);
+      }
+
+      .modern-ui label > span:first-child,
+      .modern-ui .section-label {
+        color: var(--modern-secondary) !important;
+        font-size: 12px !important;
+        font-weight: 600 !important;
+      }
+
+      .modern-ui .calendar-shell {
+        padding: 12px !important;
+      }
+
+      .modern-ui .calendar-day {
+        border-color: rgba(255, 255, 255, 0.075) !important;
+        box-shadow: none;
+      }
+
+      .modern-ui .calendar-day:hover {
+        border-color: rgba(255, 255, 255, 0.2) !important;
+        transform: translateY(-1px);
+      }
+
+      .modern-ui details > summary {
+        min-height: 44px;
+        align-items: center;
+      }
+
+      .modern-ui .summary-card {
+        border-color: rgba(var(--summary-rgb), 0.12);
+        background: rgba(var(--summary-rgb), 0.075);
+      }
+
+      .modern-ui .live-total {
+        padding: 34px 16px 30px;
+        border-bottom: 1px solid var(--modern-hairline);
+      }
+
+      .modern-ui .live-total-value {
+        font-weight: 720 !important;
+        color: #ffffff;
+        text-shadow: 0 8px 32px rgba(var(--theme-accent-rgb), 0.12);
+      }
+
+      .modern-ui .live-metric {
+        min-height: 132px;
+        display: flex;
+        flex-direction: column;
+        justify-content: space-between;
+        padding: 16px !important;
+      }
+
+      .modern-ui .live-metric p {
+        color: var(--modern-secondary) !important;
+        font-size: 12px !important;
+        font-weight: 600 !important;
+      }
+
+      .modern-ui .live-metric button {
+        min-width: 44px;
+        min-height: 44px;
+      }
+
+      .modern-ui .themed-primary {
+        background: var(--theme-accent-strong);
+        color: #050505;
+      }
+
+      .modern-ui .themed-primary:hover {
+        background: var(--theme-accent-hover);
+      }
+
+      .modern-ui .themed-active {
+        border-color: rgba(var(--theme-accent-rgb), 0.38);
+        background: rgba(var(--theme-accent-rgb), 0.16);
+        color: var(--theme-accent-text);
+      }
+
+      .modern-ui .themed-soft {
+        border-color: rgba(255, 255, 255, 0.09);
+        background: var(--modern-fill);
+        color: rgba(255, 255, 255, 0.78);
+      }
+
+      .modern-ui .text-zinc-500,
+      .modern-ui .text-zinc-600 {
+        color: var(--modern-secondary) !important;
+      }
+
+      .modern-ui .text-zinc-400 {
+        color: rgba(235, 235, 245, 0.72) !important;
+      }
+
+      @media (max-width: 639px) {
+        .modern-ui {
+          padding: 12px 12px calc(94px + env(safe-area-inset-bottom)) !important;
+        }
+
+        .modern-ui .app-header {
+          top: 8px;
+          margin-bottom: 26px;
+        }
+
+        .modern-ui .app-icon {
+          display: none;
+        }
+
+        .modern-ui .app-title {
+          max-width: 155px;
+          font-size: 18px;
+        }
+
+        .modern-ui .primary-nav {
+          position: fixed;
+          top: auto;
+          right: 12px;
+          bottom: calc(10px + env(safe-area-inset-bottom));
+          left: 12px;
+          z-index: 45;
+          grid-template-columns: repeat(4, minmax(0, 1fr)) !important;
+          margin: 0;
+        }
+
+        .modern-ui .primary-nav button {
+          min-width: 0;
+          padding-right: 4px;
+          padding-left: 4px;
+          font-size: 11px;
+        }
+
+        .modern-ui .page-title {
+          margin-bottom: 20px;
+          font-size: 34px;
+        }
+
+        .modern-ui .live-total {
+          padding: 24px 8px 26px;
+        }
+
+        .modern-ui .live-total-value {
+          font-size: 58px !important;
+        }
+
+        .modern-ui .live-metric {
+          min-height: 116px;
+        }
+
+        .modern-ui .calendar-shell {
+          padding: 0 !important;
+          border: 0 !important;
+          background: transparent !important;
+          box-shadow: none;
+        }
+
+        .modern-ui .calendar-day {
+          background: var(--modern-surface) !important;
+        }
+      }
+
+      .modern-ui .page-kicker {
+        margin: 0 0 7px;
+        color: var(--modern-secondary);
+        font-size: 13px;
+        font-weight: 600;
+        text-align: left;
+      }
+
+      .modern-ui .nav-item {
+        display: flex;
+        align-items: center;
+        gap: 11px;
+        text-align: left;
+      }
+
+      .modern-ui .nav-icon {
+        display: flex;
+        width: 28px;
+        height: 28px;
+        flex: 0 0 28px;
+        align-items: center;
+        justify-content: center;
+        border-radius: 7px;
+        background: rgba(255, 255, 255, 0.055);
+      }
+
+      .modern-ui .nav-icon svg {
+        width: 18px;
+        height: 18px;
+        fill: none;
+        stroke: currentColor;
+        stroke-width: 1.8;
+        stroke-linecap: round;
+        stroke-linejoin: round;
+      }
+
+      .modern-ui .nav-copy {
+        display: flex;
+        min-width: 0;
+        flex-direction: column;
+        gap: 2px;
+      }
+
+      .modern-ui .nav-copy > span {
+        font-size: 13px;
+        font-weight: 650;
+      }
+
+      .modern-ui .nav-copy small {
+        color: var(--modern-tertiary);
+        font-size: 10px;
+        font-weight: 550;
+      }
+
+      .modern-ui .primary-nav .nav-item.themed-primary {
+        background: rgba(var(--theme-accent-rgb), 0.14);
+        color: #f5f5f7;
+      }
+
+      .modern-ui .primary-nav .nav-item.themed-primary .nav-icon {
+        background: var(--theme-accent);
+        color: #050505;
+      }
+
+      .modern-ui .calendar-page-title {
+        display: none;
+      }
+
+      .modern-ui .modern-month-hero {
+        display: grid;
+        grid-template-columns: minmax(0, 1.2fr) minmax(320px, 0.8fr);
+        gap: 32px;
+        overflow: hidden;
+        padding: 30px;
+        border: 1px solid rgba(255, 255, 255, 0.09);
+        border-top: 2px solid var(--theme-accent);
+        border-radius: 8px;
+        background: rgba(var(--theme-accent-rgb), 0.065);
+        box-shadow: 0 24px 70px rgba(0, 0, 0, 0.22);
+      }
+
+      .modern-ui .modern-month-hero-copy p {
+        margin: 0 0 5px;
+        color: var(--modern-secondary);
+        font-size: 13px;
+        font-weight: 600;
+      }
+
+      .modern-ui .modern-month-hero-copy h2 {
+        margin: 0 0 20px;
+        color: white;
+        font-size: 24px;
+        line-height: 1.1;
+        font-weight: 680;
+      }
+
+      .modern-ui .modern-month-total {
+        color: var(--theme-tier-high);
+        font-size: 54px;
+        line-height: 0.95;
+        font-weight: 720;
+        font-variant-numeric: tabular-nums;
+      }
+
+      .modern-ui .modern-month-stats {
+        display: grid;
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+        align-content: stretch;
+        border: 1px solid rgba(255, 255, 255, 0.075);
+        border-radius: 8px;
+        background: rgba(255, 255, 255, 0.035);
+      }
+
+      .modern-ui .modern-month-stats > div {
+        display: flex;
+        min-height: 76px;
+        flex-direction: column;
+        justify-content: center;
+        padding: 14px;
+        border-right: 1px solid rgba(255, 255, 255, 0.065);
+        border-bottom: 1px solid rgba(255, 255, 255, 0.065);
+      }
+
+      .modern-ui .modern-month-stats > div:nth-child(2n) {
+        border-right: 0;
+      }
+
+      .modern-ui .modern-month-stats > div:nth-last-child(-n + 2) {
+        border-bottom: 0;
+      }
+
+      .modern-ui .modern-month-stats span {
+        margin-bottom: 4px;
+        color: var(--modern-secondary);
+        font-size: 11px;
+        font-weight: 550;
+      }
+
+      .modern-ui .modern-month-stats strong {
+        color: white;
+        font-size: 16px;
+        font-weight: 680;
+        font-variant-numeric: tabular-nums;
+      }
+
+      .modern-ui .modern-month-stats > .summary-earnings strong,
+      .modern-ui .modern-month-stats > .summary-after strong,
+      .modern-ui .modern-month-stats > .summary-payroll strong,
+      .modern-ui .modern-month-stats > .summary-voucher strong,
+      .modern-ui .modern-month-stats > .summary-night strong {
+        color: rgb(var(--summary-rgb));
+      }
+
+      .modern-ui .calendar-controls {
+        display: grid;
+        grid-template-columns: minmax(220px, 0.55fr) minmax(360px, 1fr);
+        gap: 12px;
+        padding: 12px;
+        border: 1px solid rgba(255, 255, 255, 0.075);
+        border-radius: 8px;
+        background: rgba(255, 255, 255, 0.025);
+      }
+
+      .modern-ui .calendar-view-toggle {
+        align-self: end;
+        padding: 3px;
+        border-radius: 7px;
+        background: rgba(118, 118, 128, 0.18);
+      }
+
+      .modern-ui .calendar-view-toggle button {
+        min-height: 44px;
+        border: 0;
+      }
+
+      .modern-ui .calendar-period-controls {
+        gap: 8px;
+      }
+
+      .modern-ui .calendar-period-controls label > span {
+        margin-bottom: 5px;
+      }
+
+      .modern-ui .month-summary-primary {
+        display: none;
+      }
+
+      .modern-ui .legacy-monthly-summary {
+        background: rgba(255, 255, 255, 0.025) !important;
+        box-shadow: none;
+      }
+
+      .modern-ui .prediction-layout {
+        display: grid;
+        grid-template-columns: minmax(280px, 0.75fr) minmax(360px, 1.25fr);
+        gap: 16px;
+        align-items: start;
+      }
+
+      .modern-ui .prediction-layout > * {
+        margin: 0 !important;
+      }
+
+      .modern-ui .prediction-result {
+        grid-column: 2;
+        grid-row: 1 / span 2;
+        min-height: 190px;
+        display: flex;
+        flex-direction: column;
+        justify-content: center;
+        padding: 26px !important;
+        border-top: 2px solid var(--theme-accent) !important;
+        background: #151517 !important;
+      }
+
+      .modern-ui .prediction-result > div:first-of-type {
+        font-size: 48px;
+        line-height: 1;
+      }
+
+      @media (min-width: 900px) {
+        .modern-ui .app-shell {
+          max-width: 1280px;
+        }
+
+        .modern-ui .workspace-surface {
+          padding-left: 252px !important;
+        }
+
+        .modern-ui .primary-nav {
+          position: fixed;
+          top: 112px;
+          left: max(24px, calc(50vw - 640px));
+          width: 220px;
+          display: flex !important;
+          flex-direction: column;
+          gap: 5px;
+          margin: 0;
+          padding: 8px;
+          border: 0;
+          background: transparent !important;
+          box-shadow: none;
+          backdrop-filter: none;
+          -webkit-backdrop-filter: none;
+        }
+
+        .modern-ui .primary-nav .nav-item {
+          width: 100%;
+          min-height: 54px;
+          padding: 8px;
+        }
+
+        .modern-ui .live-section {
+          padding-left: 252px;
+        }
+      }
+
+      @media (min-width: 640px) and (max-width: 899px) {
+        .modern-ui .nav-copy small {
+          display: none;
+        }
+
+        .modern-ui .nav-item {
+          justify-content: center;
+        }
+
+        .modern-ui .modern-month-hero {
+          grid-template-columns: 1fr;
+        }
+      }
+
+      @media (max-width: 639px) {
+        .modern-ui .primary-nav .nav-item {
+          flex-direction: column;
+          justify-content: center;
+          gap: 4px;
+          min-height: 58px;
+        }
+
+        .modern-ui .primary-nav .nav-icon {
+          width: 24px;
+          height: 24px;
+          flex-basis: 24px;
+          background: transparent;
+        }
+
+        .modern-ui .primary-nav .nav-icon svg {
+          width: 19px;
+          height: 19px;
+        }
+
+        .modern-ui .primary-nav .nav-copy small {
+          display: none;
+        }
+
+        .modern-ui .primary-nav .nav-copy > span {
+          font-size: 10px;
+        }
+
+        .modern-ui .modern-month-hero {
+          grid-template-columns: 1fr;
+          gap: 24px;
+          padding: 22px;
+        }
+
+        .modern-ui .modern-month-total {
+          font-size: 40px;
+        }
+
+        .modern-ui .calendar-controls,
+        .modern-ui .prediction-layout {
+          display: flex;
+          flex-direction: column;
+        }
+
+        .modern-ui .prediction-layout {
+          align-items: stretch;
+        }
+
+        .modern-ui .calendar-period-controls {
+          grid-template-columns: 1fr 1fr;
+        }
+
+        .modern-ui .prediction-result {
+          order: -1;
+          min-height: 160px;
+        }
+
+        .modern-ui .prediction-result > div:first-of-type {
+          font-size: 40px;
+        }
+      }
+
+      @media (prefers-reduced-motion: reduce) {
+        .app-root,
+        .modern-ui .calendar-day {
+          transition: none !important;
+        }
       }
 
       .themed-active {
@@ -1665,6 +2323,10 @@
           const timer = setInterval(() => setCurrentTime(new Date()), 1000);
           return () => clearInterval(timer);
         }, []);
+
+        useEffect(() => {
+          window.scrollTo({ top: 0, behavior: "auto" });
+        }, [mode]);
 
         useEffect(() => {
           if (session) {
@@ -3368,6 +4030,72 @@
           (liveBaseRateByCode[livePayCode] || payRates.regularHourlyRate) +
           (isNightShift(currentTime) && livePayCode !== "S50" && livePayCode !== "S45" ? liveNightExtraRate : 0);
         const activeTheme = DARK_THEMES[darkTheme] || DARK_THEMES.classic;
+        const primaryNavigationItems = [
+          {
+            key: "calendar",
+            label: "Calendario",
+            detail: "Turni e paga",
+            icon: (
+              <svg viewBox="0 0 24 24" aria-hidden="true">
+                <rect x="3" y="5" width="18" height="16" rx="2" />
+                <path d="M8 3v4M16 3v4M3 10h18" />
+              </svg>
+            ),
+          },
+          {
+            key: "import",
+            label: "Importa",
+            detail: "Da PDF",
+            icon: (
+              <svg viewBox="0 0 24 24" aria-hidden="true">
+                <path d="M12 3v12M7 10l5 5 5-5" />
+                <path d="M4 17v3h16v-3" />
+              </svg>
+            ),
+          },
+          {
+            key: "track",
+            label: "Paga Live",
+            detail: "Turno attuale",
+            icon: (
+              <svg viewBox="0 0 24 24" aria-hidden="true">
+                <circle cx="12" cy="12" r="9" />
+                <path d="M12 7v5l3 2" />
+              </svg>
+            ),
+          },
+          {
+            key: "predict",
+            label: "Prevedi",
+            detail: "Simula giornata",
+            icon: (
+              <svg viewBox="0 0 24 24" aria-hidden="true">
+                <path d="M4 18V9M10 18V5M16 18v-7M22 18V3" />
+              </svg>
+            ),
+          },
+        ];
+        const renderPrimaryNavigation = () => (
+          <nav className="primary-nav grid grid-cols-2 sm:grid-cols-4 gap-2 mb-8 rounded bg-black/30 p-1" aria-label="Navigazione principale">
+            {primaryNavigationItems.map((item) => (
+              <button
+                key={item.key}
+                type="button"
+                onClick={() => setMode(item.key)}
+                aria-current={mode === item.key ? "page" : undefined}
+                className={`nav-item rounded px-4 py-3 text-xs font-black uppercase tracking-widest transition ${
+                  mode === item.key ? "themed-primary" : "text-zinc-400 hover:text-white"
+                }`}
+              >
+                <span className="nav-icon">{item.icon}</span>
+                <span className="nav-copy">
+                  <span>{item.label}</span>
+                  <small>{item.detail}</small>
+                </span>
+              </button>
+            ))}
+          </nav>
+        );
         const renderCalendarShiftEditor = (shift, entry, compact = false) => {
           const isExpanded = expandedCalendarShiftId === shift.id;
           const breakdown = entry.breakdown;
@@ -3590,7 +4318,7 @@
 
         return (
           <div
-            className={`min-h-screen ${activeTheme.pageClass} text-white font-sans flex flex-col items-center p-4 sm:p-6`}
+            className={`app-root modern-ui min-h-screen ${activeTheme.pageClass} text-white font-sans flex flex-col items-center p-4 sm:p-6`}
             style={{
               "--theme-accent": activeTheme.accent,
               "--theme-accent-rgb": activeTheme.accentRgb,
@@ -3607,7 +4335,7 @@
               "--summary-night-rgb": activeTheme.summaryNightRgb,
             }}
           >
-            <div className={`fixed inset-0 pointer-events-none ${activeTheme.overlayClass}`}></div>
+            <div className={`theme-overlay fixed inset-0 pointer-events-none ${activeTheme.overlayClass}`}></div>
 
             {accountPromptOpen && (
               <div className="fixed inset-0 z-50 flex items-center justify-center overflow-y-auto bg-black/90 p-4">
@@ -3736,11 +4464,12 @@
               </div>
             )}
 
-            <main className="w-full max-w-4xl z-10">
-              <header className="flex flex-col gap-4 sm:flex-row sm:justify-between sm:items-center mb-10">
-                <div>
-                  <h1 className="text-2xl font-bold tracking-tight flex flex-wrap items-center gap-3">
-                    Calcolatore Stipendio
+            <main className="app-shell w-full max-w-4xl z-10">
+              <header className="app-header flex items-center justify-between gap-3 mb-10">
+                <div className="flex min-w-0 items-center gap-3">
+                  <span className="app-icon" aria-hidden="true">€</span>
+                  <h1 className="app-title text-2xl font-bold tracking-tight flex min-w-0 flex-wrap items-center gap-3">
+                    <span>Calcolatore Stipendio</span>
                     {holiday && (
                       <span className="bg-emerald-500/10 text-emerald-300 text-[10px] px-2 py-0.5 rounded border border-emerald-500/20 uppercase font-black">
                         {holiday}
@@ -3748,58 +4477,43 @@
                     )}
                   </h1>
                 </div>
-                <button
-                  onClick={() => {
-                    setMode("settings");
-                    setSettingsStatus("");
-                  }}
-                  className={`self-start sm:self-auto rounded border px-4 py-2 text-[10px] font-bold uppercase tracking-widest transition ${
-                    mode === "settings" ? "themed-active" : "border-white/10 text-zinc-300 hover:text-white"
-                  }`}
-                >
-                  Impostazioni
-                </button>
+                <div className="flex shrink-0 items-center gap-2">
+                  <button
+                    onClick={() => {
+                      setMode("settings");
+                      setSettingsStatus("");
+                    }}
+                    aria-label="Apri impostazioni"
+                    className={`flex min-h-10 items-center rounded border px-3 py-2 text-[11px] font-bold transition ${
+                      mode === "settings" ? "themed-active" : "border-white/10 text-zinc-300 hover:text-white"
+                    }`}
+                  >
+                    <span className="hidden sm:inline">Impostazioni</span>
+                    <svg className="sm:hidden" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" aria-hidden="true">
+                      <circle cx="12" cy="12" r="3" />
+                      <path d="M19.4 15a1.7 1.7 0 0 0 .34 1.88l.06.06-2.83 2.83-.06-.06a1.7 1.7 0 0 0-1.88-.34 1.7 1.7 0 0 0-1.03 1.56V21h-4v-.08A1.7 1.7 0 0 0 9 19.36a1.7 1.7 0 0 0-1.88.34l-.06.06-2.83-2.83.06-.06A1.7 1.7 0 0 0 4.63 15a1.7 1.7 0 0 0-1.55-1.03H3v-4h.08A1.7 1.7 0 0 0 4.64 9a1.7 1.7 0 0 0-.34-1.88l-.06-.06 2.83-2.83.06.06A1.7 1.7 0 0 0 9 4.63a1.7 1.7 0 0 0 1.03-1.55V3h4v.08A1.7 1.7 0 0 0 15 4.64a1.7 1.7 0 0 0 1.88-.34l.06-.06 2.83 2.83-.06.06A1.7 1.7 0 0 0 19.37 9a1.7 1.7 0 0 0 1.55 1.03H21v4h-.08A1.7 1.7 0 0 0 19.4 15Z" />
+                    </svg>
+                  </button>
+                </div>
               </header>
 
               {!activeTrackSession || mode !== "track" ? (
-                <section className="flex flex-col items-center justify-center min-h-[60vh] text-center">
-                  <div className="bg-zinc-900/70 border border-white/10 p-6 sm:p-10 rounded w-full max-w-4xl backdrop-blur">
-                    <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 mb-8 rounded bg-black/30 p-1">
-                      <button
-                        onClick={() => setMode("calendar")}
-                        className={`rounded px-4 py-3 text-xs font-black uppercase tracking-widest transition ${
-                          mode === "calendar" ? "themed-primary" : "text-zinc-400 hover:text-white"
-                        }`}
-                      >
-                        Calendario
-                      </button>
-                      <button
-                        onClick={() => setMode("import")}
-                        className={`rounded px-4 py-3 text-xs font-black uppercase tracking-widest transition ${
-                          mode === "import" ? "themed-primary" : "text-zinc-400 hover:text-white"
-                        }`}
-                      >
-                        Importa
-                      </button>
-                      <button
-                        onClick={() => setMode("track")}
-                        className={`rounded px-4 py-3 text-xs font-black uppercase tracking-widest transition ${
-                          mode === "track" ? "themed-primary" : "text-zinc-400 hover:text-white"
-                        }`}
-                      >
-                        Paga Live
-                      </button>
-                      <button
-                        onClick={() => setMode("predict")}
-                        className={`rounded px-4 py-3 text-xs font-black uppercase tracking-widest transition ${
-                          mode === "predict" ? "themed-primary" : "text-zinc-400 hover:text-white"
-                        }`}
-                      >
-                        Prevedi
-                      </button>
-                    </div>
+                <section className="workspace-section flex flex-col items-center justify-center min-h-[60vh] text-center">
+                  <div className="workspace-surface bg-zinc-900/70 border border-white/10 p-6 sm:p-10 rounded w-full max-w-4xl backdrop-blur">
+                    {renderPrimaryNavigation()}
 
-                    <h2 className="text-4xl font-black mb-8">
+                    {mode !== "calendar" && (
+                      <p className="page-kicker">
+                        {mode === "track"
+                          ? "Oggi"
+                          : mode === "predict"
+                            ? "Simulazione"
+                            : mode === "import"
+                              ? "Nuovo calendario"
+                              : "Preferenze"}
+                      </p>
+                    )}
+                    <h2 className={`page-title text-4xl font-black mb-8 ${mode === "calendar" ? "calendar-page-title" : ""}`}>
                       {mode === "track"
                         ? "Paga Live"
                         : mode === "predict"
@@ -3811,10 +4525,10 @@
                               : currentCalendarMonthLabel}
                     </h2>
 
-                    <div className="mb-10 text-left space-y-4">
+                    <div className="page-content mb-10 text-left space-y-4">
                       {mode === "settings" ? (
                         <div className="mx-auto max-w-2xl space-y-5 text-left">
-                          <div className="rounded border border-white/10 bg-white/[0.035] p-4">
+                          <div className="surface-panel rounded border border-white/10 bg-white/[0.035] p-4">
                             <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
                               <div>
                                 <span className="block text-[10px] font-black uppercase tracking-widest text-zinc-500">
@@ -4076,7 +4790,7 @@
                       ) : mode === "import" ? (
                         <div className="grid grid-cols-1 lg:grid-cols-[0.95fr_1.05fr] gap-5 text-left">
                           <div className="space-y-4">
-                            <div className="rounded border border-white/10 bg-black/30 p-4">
+                            <div className="surface-panel rounded border border-white/10 bg-black/30 p-4">
                               <div className="flex items-center gap-2 mb-3">
                                 <span className="flex h-6 w-6 items-center justify-center rounded themed-soft text-xs font-black">
                                   1
@@ -4113,7 +4827,7 @@
                               )}
                             </div>
 
-                            <div className="rounded border border-white/10 bg-black/30 p-4">
+                            <div className="surface-panel rounded border border-white/10 bg-black/30 p-4">
                               <div className="flex items-center gap-2 mb-3">
                                 <span className="flex h-6 w-6 items-center justify-center rounded themed-soft text-xs font-black">
                                   2
@@ -4143,7 +4857,7 @@
                           </div>
 
                           <div className="space-y-4">
-                            <div className="rounded border border-white/10 bg-black/30 p-4">
+                            <div className="surface-panel rounded border border-white/10 bg-black/30 p-4">
                               <div className="flex items-center gap-2">
                                 <div className="flex items-center gap-2">
                                   <span className="flex h-6 w-6 items-center justify-center rounded themed-soft text-xs font-black">
@@ -4364,7 +5078,7 @@
                           </div>
                         </div>
                       ) : mode === "predict" ? (
-                        <div className="space-y-4">
+                        <div className="prediction-layout space-y-4">
                           <label className="block">
                             <span className="block text-[10px] font-bold text-zinc-500 uppercase tracking-widest mb-2">
                               Data
@@ -4410,7 +5124,7 @@
                               </select>
                             </label>
                           </div>
-                          <div className="bg-black/30 border border-white/10 rounded p-4">
+                          <div className="prediction-result surface-panel bg-black/30 border border-white/10 rounded p-4">
                             <p className="text-[10px] font-black text-zinc-500 uppercase tracking-widest mb-2">
                               Stima giornata
                             </p>
@@ -4455,8 +5169,39 @@
                           </div>
                         </div>
                       ) : (
-                        <div className="space-y-4">
-                          <div className="grid grid-cols-2 gap-2">
+                        <div className="calendar-workspace space-y-4">
+                          <section className="modern-month-hero" aria-label={`Riepilogo ${currentCalendarMonthLabel}`}>
+                              <div className="modern-month-hero-copy">
+                                <p>Disponibile questo mese</p>
+                                <h2>{currentCalendarMonthLabel}</h2>
+                                <div className="modern-month-total">
+                                  EUR {monthlyPrediction.total.toLocaleString("it-IT", {
+                                    minimumFractionDigits: 2,
+                                    maximumFractionDigits: 2,
+                                  })}
+                                </div>
+                              </div>
+                              <div className="modern-month-stats">
+                                <div className="summary-payroll">
+                                  <span>In busta</span>
+                                  <strong>EUR {monthlyPrediction.payslipNetEstimate.net.toFixed(2)}</strong>
+                                </div>
+                                <div className="summary-voucher">
+                                  <span>Buoni</span>
+                                  <strong>EUR {monthlyPrediction.foodVouchers.toFixed(2)}</strong>
+                                </div>
+                                <div className="summary-after">
+                                  <span>Ore pagate</span>
+                                  <strong>{(monthlyPrediction.paidElapsed / 3600000).toFixed(1)}h</strong>
+                                </div>
+                                <div className="summary-night">
+                                  <span>Ore notte</span>
+                                  <strong>{getTotalNightHours(monthlyPrediction).toFixed(1)}h</strong>
+                                </div>
+                              </div>
+                          </section>
+                          <div className="calendar-controls">
+                          <div className="calendar-view-toggle grid grid-cols-2 gap-2">
                             <button
                               onClick={() => setCalendarView("plan")}
                               className={`rounded border px-3 py-3 text-[10px] font-black uppercase tracking-widest transition ${
@@ -4478,7 +5223,7 @@
                               Grafico
                             </button>
                           </div>
-                          <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                          <div className="calendar-period-controls grid grid-cols-1 sm:grid-cols-2 gap-4">
                             <label className="block">
                               <span className="block text-[10px] font-bold text-zinc-500 uppercase tracking-widest mb-2">
                                 Mese
@@ -4516,9 +5261,10 @@
                               </select>
                             </label>
                           </div>
+                          </div>
                           {calendarView === "plan" ? (
                             <>
-                          <div className="bg-black/30 border border-white/10 rounded p-3">
+                          <div className="calendar-shell surface-panel bg-black/30 border border-white/10 rounded p-3">
                             <div className="sm:hidden space-y-2">
                               {calendarDays
                                 .filter((day) => day.inMonth)
@@ -4532,7 +5278,7 @@
                                   return (
                                     <div
                                       key={day.dateValue}
-                                      className={`w-full overflow-hidden rounded border text-left align-top transition ${getCalendarCardClasses(isSelected, hasShift, isSick, isLeave)} ${startsWeek ? "mt-4" : ""}`}
+                                      className={`calendar-day w-full overflow-hidden rounded border text-left align-top transition ${getCalendarCardClasses(isSelected, hasShift, isSick, isLeave)} ${startsWeek ? "mt-4" : ""}`}
                                     >
                                       <button
                                         type="button"
@@ -4676,7 +5422,7 @@
                                     onPointerUp={handleCalendarDayPointerEnd}
                                     onPointerLeave={handleCalendarDayPointerEnd}
                                     onPointerCancel={handleCalendarDayPointerEnd}
-                                    className={`min-h-24 rounded border p-2 text-left align-top transition ${getCalendarCardClasses(isSelected, hasShift, isSick, isLeave)} ${day.inMonth ? "opacity-100" : "opacity-35"}`}
+                                    className={`calendar-day min-h-24 rounded border p-2 text-left align-top transition ${getCalendarCardClasses(isSelected, hasShift, isSick, isLeave)} ${day.inMonth ? "opacity-100" : "opacity-35"}`}
                                   >
                                     <div className="flex items-start justify-between gap-1">
                                       <span className="text-sm font-black text-white">{day.date.getDate()}</span>
@@ -4755,7 +5501,7 @@
                             </div>
                           </div>
 
-                          <div className="hidden rounded border border-white/10 bg-black/30 p-4 text-left sm:block">
+                          <div className="surface-panel hidden rounded border border-white/10 bg-black/30 p-4 text-left sm:block">
                             <div className="flex flex-wrap items-start justify-between gap-3">
                               <div>
                                 <p className="text-[10px] font-black uppercase tracking-widest text-zinc-500">
@@ -4802,10 +5548,10 @@
                             )}
                           </div>
 
-                          <div className="bg-black/30 border border-white/10 rounded p-4 text-left">
+                          <div className="legacy-monthly-summary summary-panel bg-black/30 border border-white/10 rounded p-4 text-left">
                             <div className="mb-3 flex items-center justify-between gap-3">
                               <p className="text-[10px] font-black text-zinc-500 uppercase tracking-widest">
-                                Totale mensile stimato
+                                Dettagli della stima
                               </p>
                               <div
                                 className="inline-flex items-center gap-0.5 rounded border border-white/[0.07] bg-white/[0.02] p-0.5"
@@ -4831,7 +5577,7 @@
                                 ))}
                               </div>
                             </div>
-                            <div className="mb-4">
+                            <div className="month-summary-primary mb-4">
                               <div className="text-4xl font-black tabular-nums themed-text">
                                 EUR {monthlyPrediction.total.toLocaleString("it-IT", {
                                   minimumFractionDigits: 2,
@@ -4980,7 +5726,7 @@
                           </details>
                             </>
                           ) : (
-                            <div className="bg-black/30 border border-white/10 rounded p-4">
+                            <div className="surface-panel bg-black/30 border border-white/10 rounded p-4">
                               <div className="flex flex-wrap items-start justify-between gap-3 mb-4">
                                 <div>
                                   <p className="text-[10px] font-black text-zinc-500 uppercase tracking-widest mb-2">
@@ -5251,43 +5997,10 @@
                   </div>
                 </section>
               ) : (
-                <section className="flex flex-col items-center">
-                  <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 mb-8 rounded bg-black/30 p-1 w-full">
-                    <button
-                      onClick={() => setMode("calendar")}
-                      className={`rounded px-4 py-3 text-xs font-black uppercase tracking-widest transition ${
-                        mode === "calendar" ? "themed-primary" : "text-zinc-400 hover:text-white"
-                      }`}
-                    >
-                      Calendario
-                    </button>
-                    <button
-                      onClick={() => setMode("import")}
-                      className={`rounded px-4 py-3 text-xs font-black uppercase tracking-widest transition ${
-                        mode === "import" ? "themed-primary" : "text-zinc-400 hover:text-white"
-                      }`}
-                    >
-                      Importa
-                    </button>
-                    <button
-                      onClick={() => setMode("track")}
-                      className={`rounded px-4 py-3 text-xs font-black uppercase tracking-widest transition ${
-                        mode === "track" ? "themed-primary" : "text-zinc-400 hover:text-white"
-                      }`}
-                    >
-                      Paga Live
-                    </button>
-                    <button
-                      onClick={() => setMode("predict")}
-                      className={`rounded px-4 py-3 text-xs font-black uppercase tracking-widest transition ${
-                        mode === "predict" ? "themed-primary" : "text-zinc-400 hover:text-white"
-                      }`}
-                    >
-                      Prevedi
-                    </button>
-                  </div>
-                  <div className="text-center mb-10 w-full">
-                    <div className="text-[4.5rem] sm:text-[6rem] md:text-[8rem] font-black tabular-nums leading-none tracking-tight mb-4 break-words">
+                <section className="live-section flex flex-col items-center">
+                  {renderPrimaryNavigation()}
+                  <div className="live-total text-center mb-10 w-full">
+                    <div className="live-total-value text-[4.5rem] sm:text-[6rem] md:text-[8rem] font-black tabular-nums leading-none tracking-tight mb-4 break-words">
                       EUR {currentBreakdown.total.toLocaleString("it-IT", {
                         minimumFractionDigits: 2,
                         maximumFractionDigits: 2,
@@ -5328,7 +6041,7 @@
                   </div>
 
                   <div className="grid grid-cols-2 lg:grid-cols-4 gap-2 w-full mb-4">
-                    <div className="bg-white/[0.04] border border-white/10 p-3 rounded text-left">
+                    <div className="live-metric surface-panel bg-white/[0.04] border border-white/10 p-3 rounded text-left">
                       <p className="text-[9px] font-black text-zinc-500 uppercase mb-3 tracking-widest">
                         Ora inizio
                       </p>
@@ -5359,7 +6072,7 @@
                         </button>
                       </div>
                     </div>
-                    <div className="bg-white/[0.04] border border-white/10 p-3 rounded text-left">
+                    <div className="live-metric surface-panel bg-white/[0.04] border border-white/10 p-3 rounded text-left">
                       <p className="text-[9px] font-black text-zinc-500 uppercase mb-3 tracking-widest">
                         Trascorso
                       </p>
@@ -5374,7 +6087,7 @@
                           .padStart(2, "0")}
                       </span>
                     </div>
-                    <div className="bg-white/[0.04] border border-white/10 p-3 rounded text-left">
+                    <div className="live-metric surface-panel bg-white/[0.04] border border-white/10 p-3 rounded text-left">
                       <p className="text-[9px] font-black text-zinc-500 uppercase mb-3 tracking-widest">
                         Tariffa stimata
                       </p>
@@ -5386,7 +6099,7 @@
                         EUR {liveRate.toFixed(2)}
                       </span>
                     </div>
-                    <div className="bg-white/[0.04] border border-white/10 p-3 rounded text-left">
+                    <div className="live-metric surface-panel bg-white/[0.04] border border-white/10 p-3 rounded text-left">
                       <p className="text-[9px] font-black text-zinc-500 uppercase mb-3 tracking-widest">
                         Fine automatica
                       </p>
@@ -5407,7 +6120,7 @@
                     </div>
                   </div>
 
-                  <details className="w-full mb-10 rounded border border-white/10 bg-white/[0.03] p-3 text-left">
+                  <details className="surface-panel w-full mb-10 rounded border border-white/10 bg-white/[0.03] p-3 text-left">
                     <summary className="cursor-pointer text-[10px] font-black uppercase tracking-widest text-zinc-400">
                       Totale di oggi
                     </summary>
