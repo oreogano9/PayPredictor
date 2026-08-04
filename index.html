@@ -1352,6 +1352,11 @@
         const [accountPin, setAccountPin] = useState("");
         const [accountStatus, setAccountStatus] = useState("");
         const [accountBusy, setAccountBusy] = useState(false);
+        const [accountEditorOpen, setAccountEditorOpen] = useState(false);
+        const [accountEditName, setAccountEditName] = useState(initialAccountSessionRef.current?.name || "");
+        const [accountEditPin, setAccountEditPin] = useState("");
+        const [accountEditStatus, setAccountEditStatus] = useState("");
+        const [accountEditBusy, setAccountEditBusy] = useState(false);
         const [cloudSyncStatus, setCloudSyncStatus] = useState("");
         const [loading, setLoading] = useState(true);
         const [services, setServices] = useState(null);
@@ -1418,6 +1423,8 @@
           setAccountSession(nextAccountSession);
           writeAccountSession(nextAccountSession);
           setAccountName(result.name);
+          setAccountEditName(result.name);
+          setAccountEditPin("");
           setAccountPin("");
           setAccountPromptOpen(false);
           setAccountStatus("");
@@ -1482,8 +1489,63 @@
           setAccountPin((current) => current.slice(0, -1));
         };
 
+        const updateAccountCredentials = async () => {
+          const token = accountSessionRef.current?.token;
+          const nextName = accountEditName.trim();
+          if (!token || accountEditBusy) return;
+          if (nextName.length < 2 || nextName.length > 40) {
+            setAccountEditStatus("Il nome deve contenere da 2 a 40 caratteri");
+            return;
+          }
+          if (accountEditPin && !/^\d{4}$/.test(accountEditPin)) {
+            setAccountEditStatus("Il nuovo PIN deve contenere 4 numeri");
+            return;
+          }
+          if (nextName === accountSessionRef.current.name && !accountEditPin) {
+            setAccountEditStatus("Nessuna modifica da salvare");
+            return;
+          }
+
+          setAccountEditBusy(true);
+          setAccountEditStatus("Aggiornamento accesso...");
+          try {
+            await cloudSaveChainRef.current.catch(() => undefined);
+            const result = await callAccountApi({
+              action: "update_credentials",
+              token,
+              name: nextName,
+              pin: accountEditPin,
+            });
+            const nextSession = { name: result.name, token: result.token };
+            accountSessionRef.current = nextSession;
+            setAccountSession(nextSession);
+            writeAccountSession(nextSession);
+            setAccountName(result.name);
+            setAccountEditName(result.name);
+            setAccountEditPin("");
+            setAccountEditorOpen(false);
+            setAccountEditStatus("");
+            setCloudSyncStatus("Accesso aggiornato e backup protetto");
+          } catch (error) {
+            if (error.status === 401) {
+              accountSessionRef.current = null;
+              setAccountSession(null);
+              writeAccountSession(null);
+              setAccountMode("login");
+              setAccountPromptOpen(true);
+              setAccountStatus("Accesso scaduto. Inserisci di nuovo nome e PIN.");
+            }
+            setAccountEditStatus(error.message);
+          } finally {
+            setAccountEditBusy(false);
+          }
+        };
+
         useEffect(() => {
           accountSessionRef.current = accountSession;
+          if (accountSession?.name) {
+            setAccountEditName(accountSession.name);
+          }
         }, [accountSession]);
 
         useEffect(() => {
@@ -2225,6 +2287,9 @@
           writeAccountSession(null);
           setAccountMode("login");
           setAccountPin("");
+          setAccountEditorOpen(false);
+          setAccountEditPin("");
+          setAccountEditStatus("");
           setAccountStatus("I dati restano salvati in questo browser");
           setAccountPromptOpen(true);
         };
@@ -3658,7 +3723,19 @@
                                   {cloudSyncStatus || "Dati locali e backup cloud attivi"}
                                 </span>
                               </div>
-                              <div className="flex gap-2">
+                              <div className="flex flex-wrap gap-2">
+                                <button
+                                  type="button"
+                                  onClick={() => {
+                                    setAccountEditorOpen((current) => !current);
+                                    setAccountEditName(accountSession?.name || "");
+                                    setAccountEditPin("");
+                                    setAccountEditStatus("");
+                                  }}
+                                  className="rounded border border-white/10 px-3 py-2 text-[9px] font-black uppercase tracking-widest text-zinc-300 hover:text-white"
+                                >
+                                  {accountEditorOpen ? "Chiudi" : "Modifica accesso"}
+                                </button>
                                 <button
                                   type="button"
                                   onClick={syncCloudNow}
@@ -3675,6 +3752,64 @@
                                 </button>
                               </div>
                             </div>
+                            {accountEditorOpen && accountSession && (
+                              <div className="mt-4 border-t border-white/10 pt-4">
+                                <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+                                  <label className="block">
+                                    <span className="mb-2 block text-[9px] font-black uppercase tracking-widest text-zinc-500">
+                                      Nome utente
+                                    </span>
+                                    <input
+                                      type="text"
+                                      autoComplete="username"
+                                      value={accountEditName}
+                                      maxLength={40}
+                                      onChange={(event) => {
+                                        setAccountEditName(event.target.value);
+                                        setAccountEditStatus("");
+                                      }}
+                                      className="w-full rounded border border-white/10 bg-black/40 px-3 py-3 text-sm font-bold text-white"
+                                    />
+                                  </label>
+                                  <label className="block">
+                                    <span className="mb-2 block text-[9px] font-black uppercase tracking-widest text-zinc-500">
+                                      Nuovo PIN
+                                    </span>
+                                    <input
+                                      type="password"
+                                      inputMode="numeric"
+                                      autoComplete="new-password"
+                                      value={accountEditPin}
+                                      maxLength={4}
+                                      placeholder="Lascia vuoto per mantenerlo"
+                                      onChange={(event) => {
+                                        setAccountEditPin(event.target.value.replace(/\D/g, "").slice(0, 4));
+                                        setAccountEditStatus("");
+                                      }}
+                                      className="w-full rounded border border-white/10 bg-black/40 px-3 py-3 text-sm font-bold text-white"
+                                    />
+                                  </label>
+                                </div>
+                                <div className="mt-3 flex flex-wrap items-center gap-2">
+                                  <button
+                                    type="button"
+                                    disabled={accountEditBusy}
+                                    onClick={updateAccountCredentials}
+                                    className={`rounded px-4 py-3 text-[9px] font-black uppercase tracking-widest ${
+                                      accountEditBusy ? "bg-zinc-800 text-zinc-500" : "themed-primary"
+                                    }`}
+                                  >
+                                    {accountEditBusy ? "Aggiornamento..." : "Aggiorna accesso"}
+                                  </button>
+                                  <span className="text-[9px] font-bold text-zinc-600">
+                                    Il cambio disconnette le altre sessioni.
+                                  </span>
+                                </div>
+                                {accountEditStatus && (
+                                  <p className="mt-3 text-[10px] font-bold text-amber-200">{accountEditStatus}</p>
+                                )}
+                              </div>
+                            )}
                           </div>
                           <label className="block">
                             <span className="mb-2 block text-[10px] font-bold uppercase tracking-widest text-zinc-500">

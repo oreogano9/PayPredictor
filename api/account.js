@@ -35,9 +35,15 @@ function verifyPin(pin, record) {
   return expected.length === actual.length && crypto.timingSafeEqual(expected, actual);
 }
 
-function signSession(accountKey, displayName, secret) {
+function signSession(accountKey, displayName, secret, authVersion = 1) {
   const payload = Buffer.from(
-    JSON.stringify({ version: 1, accountKey, displayName, expiresAt: Date.now() + SESSION_MAX_AGE_MS }),
+    JSON.stringify({
+      version: 1,
+      accountKey,
+      displayName,
+      authVersion,
+      expiresAt: Date.now() + SESSION_MAX_AGE_MS,
+    }),
   ).toString("base64url");
   const signature = crypto.createHmac("sha256", secret).update(payload).digest("base64url");
   return `${payload}.${signature}`;
@@ -65,15 +71,29 @@ function verifySession(token, secret) {
   }
 }
 
-function validateCredentials(name, pin) {
+function validateName(name) {
   const normalizedName = normalizeName(name);
   if (normalizedName.length < 2 || normalizedName.length > 40) {
     return { error: "Il nome deve contenere da 2 a 40 caratteri" };
   }
+  return { normalizedName };
+}
+
+function validateCredentials(name, pin) {
+  const nameValidation = validateName(name);
+  if (nameValidation.error) return nameValidation;
   if (!/^\d{4}$/.test(String(pin || ""))) {
     return { error: "Il PIN deve contenere 4 numeri" };
   }
-  return { normalizedName };
+  return nameValidation;
+}
+
+function recordAuthVersion(record) {
+  return Number.isInteger(record?.authVersion) && record.authVersion > 0 ? record.authVersion : 1;
+}
+
+function sessionMatchesRecord(session, record) {
+  return (Number.isInteger(session?.authVersion) ? session.authVersion : 1) === recordAuthVersion(record);
 }
 
 function validateData(data) {
@@ -180,6 +200,7 @@ module.exports = async function handler(request, response) {
         await writeRecord(blobSdk, pathname, {
           schemaVersion: 1,
           displayName,
+          authVersion: 1,
           pinSalt,
           pinHash: hashPin(String(body.pin), pinSalt),
           data: body.data,
@@ -189,7 +210,7 @@ module.exports = async function handler(request, response) {
 
         return response.status(201).json({
           name: displayName,
-          token: signSession(accountKey, displayName, secret),
+          token: signSession(accountKey, displayName, secret, 1),
           data: body.data,
         });
       }
@@ -205,8 +226,75 @@ module.exports = async function handler(request, response) {
       loginAttempts.delete(attemptKey);
       return response.status(200).json({
         name: record.displayName,
-        token: signSession(accountKey, record.displayName, secret),
+        token: signSession(accountKey, record.displayName, secret, recordAuthVersion(record)),
         data: record.data,
+      });
+    }
+
+    if (action === "update_credentials") {
+      const session = verifySession(body.token, secret);
+      if (!session) return response.status(401).json({ error: "Accesso scaduto" });
+
+      const currentPathname = accountPath(session.accountKey);
+      const record = await readRecord(blobSdk, currentPathname);
+      if (!record || !sessionMatchesRecord(session, record)) {
+        return response.status(401).json({ error: "Accesso scaduto" });
+      }
+
+      const nameValidation = validateName(body.name);
+      if (nameValidation.error) return response.status(400).json({ error: nameValidation.error });
+      const nextPin = String(body.pin || "");
+      if (nextPin && !/^\d{4}$/.test(nextPin)) {
+        return response.status(400).json({ error: "Il nuovo PIN deve contenere 4 numeri" });
+      }
+
+      const displayName = String(body.name).normalize("NFKC").trim().replace(/\s+/g, " ");
+      const nextAccountKey = accountKeyForName(nameValidation.normalizedName, secret);
+      const nextPathname = accountPath(nextAccountKey);
+      const isRename = nextAccountKey !== session.accountKey;
+      const displayNameChanged = displayName !== record.displayName;
+      if (!isRename && !displayNameChanged && !nextPin) {
+        return response.status(400).json({ error: "Nessuna modifica da salvare" });
+      }
+
+      if (isRename && (await readRecord(blobSdk, nextPathname))) {
+        return response.status(409).json({ error: "Nome gia registrato. Scegline un altro." });
+      }
+
+      const authVersion = recordAuthVersion(record) + 1;
+      const updatedRecord = {
+        ...record,
+        displayName,
+        authVersion,
+        updatedAt: new Date().toISOString(),
+      };
+      if (nextPin) {
+        updatedRecord.pinSalt = crypto.randomBytes(16).toString("base64url");
+        updatedRecord.pinHash = hashPin(nextPin, updatedRecord.pinSalt);
+      }
+
+      if (isRename) {
+        await writeRecord(blobSdk, nextPathname, updatedRecord);
+        try {
+          await writeRecord(blobSdk, currentPathname, {
+            schemaVersion: 1,
+            authVersion,
+            movedAt: new Date().toISOString(),
+          });
+        } catch (error) {
+          await blobSdk.del(nextPathname).catch(() => undefined);
+          throw error;
+        }
+        await blobSdk.del(currentPathname).catch((error) => {
+          console.error("Old account tombstone cleanup failed", error);
+        });
+      } else {
+        await writeRecord(blobSdk, currentPathname, updatedRecord);
+      }
+
+      return response.status(200).json({
+        name: displayName,
+        token: signSession(nextAccountKey, displayName, secret, authVersion),
       });
     }
 
@@ -216,7 +304,9 @@ module.exports = async function handler(request, response) {
 
       const pathname = accountPath(session.accountKey);
       const record = await readRecord(blobSdk, pathname);
-      if (!record) return response.status(401).json({ error: "Utente non trovato" });
+      if (!record || !sessionMatchesRecord(session, record)) {
+        return response.status(401).json({ error: "Accesso scaduto" });
+      }
 
       if (action === "restore") {
         return response.status(200).json({ name: record.displayName, data: record.data });
