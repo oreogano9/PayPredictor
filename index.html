@@ -1330,6 +1330,9 @@
         const [paysUnionDues, setPaysUnionDues] = useState(() => readLocalSettings().paysUnionDues !== false);
         const [darkTheme, setDarkTheme] = useState(() => readLocalSettings().darkTheme || "classic");
         const [ccnlLevel, setCcnlLevel] = useState(() => readLocalSettings().ccnlLevel || "9");
+        const [calculationCcnlLevel, setCalculationCcnlLevel] = useState(
+          () => readLocalSettings().ccnlLevel || "9",
+        );
         const [settingsStatus, setSettingsStatus] = useState("");
         const [icalSyncStatus, setIcalSyncStatus] = useState("");
         const [currentTime, setCurrentTime] = useState(new Date());
@@ -1353,7 +1356,10 @@
         const [loading, setLoading] = useState(true);
         const [services, setServices] = useState(null);
         const isLocalMode = !firebaseConfig;
-        const payRates = useMemo(() => getCcnlPayRates(ccnlLevel), [ccnlLevel]);
+        const payRates = useMemo(
+          () => getCcnlPayRates(calculationCcnlLevel),
+          [calculationCcnlLevel],
+        );
 
         const applySnapshotToBrowser = (snapshot) => {
           const appState = snapshot?.appState || readLocalState();
@@ -1368,7 +1374,9 @@
           setPaysForParking(settings.paysForParking !== false);
           setPaysUnionDues(settings.paysUnionDues !== false);
           setDarkTheme(DARK_THEMES[settings.darkTheme] ? settings.darkTheme : "classic");
-          setCcnlLevel(CCNL_LEVEL_PROFILES[settings.ccnlLevel] ? settings.ccnlLevel : "9");
+          const nextCcnlLevel = CCNL_LEVEL_PROFILES[settings.ccnlLevel] ? settings.ccnlLevel : "9";
+          setCcnlLevel(nextCcnlLevel);
+          setCalculationCcnlLevel(nextCcnlLevel);
         };
 
         const buildCloudSnapshot = (nextAppState, nextSettings) => ({
@@ -2200,6 +2208,7 @@
           };
           writeLocalSettings(nextSettings);
           queueCloudBackup(readLocalState(), nextSettings);
+          setCalculationCcnlLevel(ccnlLevel);
           setSettingsStatus("Impostazioni salvate nel browser e nel backup cloud");
         };
 
@@ -2710,7 +2719,7 @@
           const summaryRows = [
             ["Net + vouchers", formatEuro(monthlyPrediction.total)],
             ["Payslip net estimate", formatEuro(monthlyPrediction.payslipNetEstimate.net)],
-            ["Livello CCNL handling", `${ccnlLevel}°`],
+            ["Livello CCNL handling", `${calculationCcnlLevel}°`],
             ["Paid hours", `${(monthlyPrediction.paidElapsed / 3600000).toFixed(1)} h`],
             ["Worked hours", `${(monthlyPrediction.workedPaidElapsed / 3600000).toFixed(1)} h`],
             ["Ferie", `${monthlyPrediction.leaveHours.toFixed(1)} h`],
@@ -3690,7 +3699,10 @@
                                   <button
                                     key={level}
                                     type="button"
-                                    onClick={() => setCcnlLevel(level)}
+                                    onClick={() => {
+                                      setCcnlLevel(level);
+                                      setCalculationCcnlLevel(level);
+                                    }}
                                     className={`rounded border px-3 py-3 text-left transition ${
                                       ccnlLevel === level
                                         ? "themed-active"
@@ -4535,6 +4547,31 @@
                           </div>
 
                           <div className="bg-black/30 border border-white/10 rounded p-4 text-left">
+                            <div className="mb-3 flex justify-end">
+                              <div
+                                className="inline-flex items-center gap-0.5 rounded border border-white/[0.07] bg-white/[0.02] p-0.5"
+                                title="Confronto temporaneo: non modifica le impostazioni salvate"
+                              >
+                                <span className="px-1.5 text-[8px] font-black uppercase tracking-widest text-zinc-600">
+                                  Livello
+                                </span>
+                                {["9", "8"].map((level) => (
+                                  <button
+                                    key={level}
+                                    type="button"
+                                    aria-label={`Calcola con ${level}° livello`}
+                                    onClick={() => setCalculationCcnlLevel(level)}
+                                    className={`rounded px-2 py-1 text-[9px] font-black transition ${
+                                      calculationCcnlLevel === level
+                                        ? "bg-white/10 text-zinc-200"
+                                        : "text-zinc-600 hover:text-zinc-300"
+                                    }`}
+                                  >
+                                    {level}°
+                                  </button>
+                                ))}
+                              </div>
+                            </div>
                             <div className="flex items-start justify-between gap-4 mb-4">
                               <div>
                                 <p className="text-[10px] font-black text-zinc-500 uppercase tracking-widest mb-2">
