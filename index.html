@@ -1061,6 +1061,19 @@
         return pages.join("\n");
       }
 
+      function isMidnightToMidnightCalendarBlock(start, end) {
+        if (!start || !end || end <= start) return false;
+        const startsAtMidnight =
+          start.getHours() === 0 &&
+          start.getMinutes() === 0 &&
+          start.getSeconds() === 0;
+        const endsAtMidnight =
+          end.getHours() === 0 &&
+          end.getMinutes() === 0 &&
+          end.getSeconds() === 0;
+        return startsAtMidnight && endsAtMidnight;
+      }
+
       function parsePublicIcsToShifts(icsText) {
         const unfolded = unfoldIcsLines(icsText);
         const events = unfolded.split("BEGIN:VEVENT").slice(1);
@@ -1112,7 +1125,13 @@
             return;
           }
 
-          if (isAllDay || !start || !end || end <= start) {
+          if (
+            isAllDay ||
+            !start ||
+            !end ||
+            end <= start ||
+            isMidnightToMidnightCalendarBlock(start, end)
+          ) {
             return;
           }
 
@@ -1375,11 +1394,19 @@
           setAccountBusy(true);
           setAccountStatus(accountMode === "create" ? "Creazione utente..." : "Accesso...");
           try {
+            const currentSettingsSnapshot = {
+              googleCalendarIcsUrl: googleCalendarIcsUrl.trim(),
+              paysForParking,
+              paysUnionDues,
+              darkTheme,
+            };
             const result = await callAccountApi({
               action: accountMode,
               name: accountName.trim(),
               pin: accountPin,
-              ...(accountMode === "create" ? { data: buildCloudSnapshot() } : {}),
+              ...(accountMode === "create"
+                ? { data: buildCloudSnapshot(readLocalState(), currentSettingsSnapshot) }
+                : {}),
             });
             await completeAccountAccess(result, accountMode === "login");
           } catch (error) {
