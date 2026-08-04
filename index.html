@@ -164,7 +164,6 @@
       const MONTHLY_ORDINARY_HOURS = 130;
       const MONTHLY_PARKING_DEDUCTION = 46.0;
       const PAYSLIP_MONTHLY_BASE = 920.77;
-      const PAYSLIP_REGULAR_HOURLY_RATE = PAYSLIP_MONTHLY_BASE / MONTHLY_ORDINARY_HOURS;
       const PAYSLIP_S15_RATE = 7.18664;
       const PAYSLIP_S50_RATE = 9.37387;
       const PAYSLIP_S25_RATE = 7.81156;
@@ -188,6 +187,20 @@
       const PAYSLIP_TRATTAMENTO_INTEGRATIVO = 101.91;
       const PAYSLIP_L207_INDEMNITY_RATE = 0.053;
       const PAYSLIP_ROUNDING = 0.44;
+      const CCNL_LEVEL_PROFILES = {
+        "9": {
+          label: "9° livello",
+          factor: 1,
+          fullTimeMonthlyMinimum: 1181.69,
+          description: "Valori calibrati sulle buste paga inserite",
+        },
+        "8": {
+          label: "8° livello",
+          factor: 1360.49 / 1181.69,
+          fullTimeMonthlyMinimum: 1360.49,
+          description: "Stima dalla tabella CCNL handling dello stesso periodo",
+        },
+      };
       const HOURS_EPSILON = 0.000001;
       const STORAGE_KEY = `earnings-tracker:${appId}:main`;
       const SETTINGS_STORAGE_KEY = `earnings-tracker:${appId}:settings`;
@@ -199,6 +212,29 @@
         S45: { label: "Straordinario notturno 145%", multiplier: 1.45 },
         S50: { label: "Supplementare notturno feriale", multiplier: SUPPLEMENTAL_50_MULTIPLIER },
       };
+
+      function getCcnlPayRates(level) {
+        const profile = CCNL_LEVEL_PROFILES[level] || CCNL_LEVEL_PROFILES["9"];
+        const scale = (value) => value * profile.factor;
+        const monthlyBase = scale(PAYSLIP_MONTHLY_BASE);
+        return {
+          profile,
+          baseRate: scale(BASE_RATE),
+          monthlyBase,
+          regularHourlyRate: monthlyBase / MONTHLY_ORDINARY_HOURS,
+          s15Rate: scale(PAYSLIP_S15_RATE),
+          s50Rate: scale(PAYSLIP_S50_RATE),
+          s25Rate: scale(PAYSLIP_S25_RATE),
+          s45Rate: scale(PAYSLIP_S45_RATE),
+          nttRate: scale(PAYSLIP_NTT_RATE),
+          ntdRate: scale(PAYSLIP_NTD_RATE),
+          shiftAllowanceRate: scale(PAYSLIP_SHIFT_ALLOWANCE_RATE),
+          dailyTurnistaRate: scale(PAYSLIP_DAILY_TURNISTA_RATE),
+          campoRate: scale(PAYSLIP_CAMPO_RATE),
+          holidayRestRate: scale(PAYSLIP_HOLIDAY_REST_RATE),
+          leaveDayAllowanceRate: scale(PAYSLIP_LEAVE_DAY_ALLOWANCE_RATE),
+        };
+      }
 
       const ITALIAN_HOLIDAYS = {
         "01-01": "Capodanno",
@@ -410,12 +446,17 @@
           paysForParking: true,
           paysUnionDues: true,
           darkTheme: "classic",
+          ccnlLevel: "9",
         };
 
         try {
           const saved = JSON.parse(localStorage.getItem(SETTINGS_STORAGE_KEY));
           const nextSettings = saved ? { ...fallback, ...saved } : fallback;
-          return DARK_THEMES[nextSettings.darkTheme] ? nextSettings : { ...nextSettings, darkTheme: fallback.darkTheme };
+          return {
+            ...nextSettings,
+            darkTheme: DARK_THEMES[nextSettings.darkTheme] ? nextSettings.darkTheme : fallback.darkTheme,
+            ccnlLevel: CCNL_LEVEL_PROFILES[nextSettings.ccnlLevel] ? nextSettings.ccnlLevel : fallback.ccnlLevel,
+          };
         } catch {
           return fallback;
         }
@@ -1288,6 +1329,7 @@
         const [paysForParking, setPaysForParking] = useState(() => readLocalSettings().paysForParking !== false);
         const [paysUnionDues, setPaysUnionDues] = useState(() => readLocalSettings().paysUnionDues !== false);
         const [darkTheme, setDarkTheme] = useState(() => readLocalSettings().darkTheme || "classic");
+        const [ccnlLevel, setCcnlLevel] = useState(() => readLocalSettings().ccnlLevel || "9");
         const [settingsStatus, setSettingsStatus] = useState("");
         const [icalSyncStatus, setIcalSyncStatus] = useState("");
         const [currentTime, setCurrentTime] = useState(new Date());
@@ -1311,6 +1353,7 @@
         const [loading, setLoading] = useState(true);
         const [services, setServices] = useState(null);
         const isLocalMode = !firebaseConfig;
+        const payRates = useMemo(() => getCcnlPayRates(ccnlLevel), [ccnlLevel]);
 
         const applySnapshotToBrowser = (snapshot) => {
           const appState = snapshot?.appState || readLocalState();
@@ -1325,6 +1368,7 @@
           setPaysForParking(settings.paysForParking !== false);
           setPaysUnionDues(settings.paysUnionDues !== false);
           setDarkTheme(DARK_THEMES[settings.darkTheme] ? settings.darkTheme : "classic");
+          setCcnlLevel(CCNL_LEVEL_PROFILES[settings.ccnlLevel] ? settings.ccnlLevel : "9");
         };
 
         const buildCloudSnapshot = (nextAppState, nextSettings) => ({
@@ -1399,6 +1443,7 @@
               paysForParking,
               paysUnionDues,
               darkTheme,
+              ccnlLevel,
             };
             const result = await callAccountApi({
               action: accountMode,
@@ -1746,7 +1791,7 @@
 
             return { aggregate, paidHoursBefore };
           },
-          [effectiveCalendarShifts],
+          [effectiveCalendarShifts, payRates],
         );
 
         const saveState = async (nextState) => {
@@ -1835,14 +1880,9 @@
           const breakEndMs = unpaidBreakMs > 0 ? startMs + elapsed / 2 : null;
           const breakStartMs = breakEndMs === null ? null : breakEndMs - unpaidBreakMs;
           const payableDurationHours = Math.max(0, elapsed - unpaidBreakMs) / 3600000;
-          const weeklyOvertimeBefore = Math.max(0, weeklyHoursBefore - FULL_TIME_WEEKLY_HOURS);
-          const weeklyOvertimeAfter = Math.max(
-            0,
-            weeklyHoursBefore + payableDurationHours - FULL_TIME_WEEKLY_HOURS,
-          );
-          const weeklyOvertimeHoursForShift = Math.min(
+          const weeklyRegularHoursForShift = Math.min(
             payableDurationHours,
-            Math.max(0, weeklyOvertimeAfter - weeklyOvertimeBefore),
+            Math.max(0, FULL_TIME_WEEKLY_HOURS - weeklyHoursBefore),
           );
           let paidHoursSoFar = 0;
           let regularScopeHoursSoFar = 0;
@@ -1863,7 +1903,7 @@
             const hours = paidStepMs / 3600000;
             const d = new Date(curr);
             const isAllocatedWeeklyOvertime =
-              paidHoursSoFar + HOURS_EPSILON < weeklyOvertimeHoursForShift;
+              paidHoursSoFar + HOURS_EPSILON >= weeklyRegularHoursForShift;
             const payCode = isAllocatedWeeklyOvertime
               ? isNightShift(d)
                 ? "S45"
@@ -1875,17 +1915,17 @@
                 : "ORD";
             const payCodeDetails = getPayCode(payCode);
             payCodeTotals[payCode] += hours;
-            base += hours * BASE_RATE * payCodeDetails.multiplier;
+            base += hours * payRates.baseRate * payCodeDetails.multiplier;
             if (payCode === "ORD") {
               regularScopeHoursSoFar += hours;
             }
             if (isNightShift(d) && payCode === "S45") {
               // The 145% overtime rate already includes the night premium.
             } else if (isNightShift(d) && isSundayOrHoliday(d)) {
-              nightSundayHolidayExtra += hours * (BASE_RATE * NIGHT_SUNDAY_HOLIDAY_BONUS_FRACTION);
+              nightSundayHolidayExtra += hours * (payRates.baseRate * NIGHT_SUNDAY_HOLIDAY_BONUS_FRACTION);
               nightSundayHolidayHours += hours;
             } else if (isNightShift(d) && payCode !== "S50") {
-              nightWeekdayExtra += hours * (BASE_RATE * NIGHT_WEEKDAY_BONUS_FRACTION);
+              nightWeekdayExtra += hours * (payRates.baseRate * NIGHT_WEEKDAY_BONUS_FRACTION);
               nightWeekdayHours += hours;
             }
             paidHoursSoFar += hours;
@@ -1936,18 +1976,18 @@
             };
           }
 
-          const regularPay = PAYSLIP_MONTHLY_BASE;
-          const s15Pay = roundCurrency(payCodeTotals.S15 * PAYSLIP_S15_RATE);
-          const s50Pay = roundCurrency(payCodeTotals.S50 * PAYSLIP_S50_RATE);
-          const s25Pay = roundCurrency(payCodeTotals.S25 * PAYSLIP_S25_RATE);
-          const s45Pay = roundCurrency(payCodeTotals.S45 * PAYSLIP_S45_RATE);
-          const nttPay = roundCurrency(nightWeekdayHours * PAYSLIP_NTT_RATE);
-          const ntdPay = roundCurrency(nightSundayHolidayHours * PAYSLIP_NTD_RATE);
-          const shiftAllowance = roundCurrency(workedDays * PAYSLIP_SHIFT_ALLOWANCE_RATE);
-          const dailyTurnistaAllowance = roundCurrency(workedDays * PAYSLIP_DAILY_TURNISTA_RATE);
-          const campoAllowance = roundCurrency(workedDays * PAYSLIP_CAMPO_RATE);
-          const holidayRestPay = roundCurrency(holidayRestDays * PAYSLIP_HOLIDAY_REST_RATE);
-          const leaveAllowance = roundCurrency(leaveDays * PAYSLIP_LEAVE_DAY_ALLOWANCE_RATE);
+          const regularPay = payRates.monthlyBase;
+          const s15Pay = roundCurrency(payCodeTotals.S15 * payRates.s15Rate);
+          const s50Pay = roundCurrency(payCodeTotals.S50 * payRates.s50Rate);
+          const s25Pay = roundCurrency(payCodeTotals.S25 * payRates.s25Rate);
+          const s45Pay = roundCurrency(payCodeTotals.S45 * payRates.s45Rate);
+          const nttPay = roundCurrency(nightWeekdayHours * payRates.nttRate);
+          const ntdPay = roundCurrency(nightSundayHolidayHours * payRates.ntdRate);
+          const shiftAllowance = roundCurrency(workedDays * payRates.shiftAllowanceRate);
+          const dailyTurnistaAllowance = roundCurrency(workedDays * payRates.dailyTurnistaRate);
+          const campoAllowance = roundCurrency(workedDays * payRates.campoRate);
+          const holidayRestPay = roundCurrency(holidayRestDays * payRates.holidayRestRate);
+          const leaveAllowance = roundCurrency(leaveDays * payRates.leaveDayAllowanceRate);
           const variablePay = roundCurrency(
             shiftAllowance +
               dailyTurnistaAllowance +
@@ -1967,7 +2007,7 @@
           const ivs = roundCurrency(contributionBase * PAYSLIP_IVS_RATE);
           const fis = roundCurrency(contributionBase * PAYSLIP_FIS_RATE);
           const cigs = roundCurrency(contributionBase * PAYSLIP_CIGS_RATE);
-          const unionDues = unionDuesEnabled ? roundCurrency(PAYSLIP_MONTHLY_BASE * PAYSLIP_UNION_DUES_RATE) : 0;
+          const unionDues = unionDuesEnabled ? roundCurrency(payRates.monthlyBase * PAYSLIP_UNION_DUES_RATE) : 0;
           const substituteTaxable = roundCurrency(variablePay * PAYSLIP_SUBSTITUTE_TAXABLE_VARIABLE_FRACTION);
           const substituteTax = roundCurrency(substituteTaxable * PAYSLIP_SUBSTITUTE_TAX_RATE);
           const irpefTaxable = roundCurrency(grossPayroll - fondoTrasporto - ivs - fis - cigs - substituteTaxable);
@@ -2125,8 +2165,8 @@
             const hours = elapsed / 3600000;
             return {
               ...createEmptyBreakdown(),
-              total: hours * BASE_RATE,
-              base: hours * BASE_RATE,
+              total: hours * payRates.baseRate,
+              base: hours * payRates.baseRate,
               elapsed,
               paidElapsed: elapsed,
               leaveHours: isLeaveShift(shift) ? hours : 0,
@@ -2156,6 +2196,7 @@
             paysForParking,
             paysUnionDues,
             darkTheme,
+            ccnlLevel,
           };
           writeLocalSettings(nextSettings);
           queueCloudBackup(readLocalState(), nextSettings);
@@ -2186,6 +2227,7 @@
             paysForParking,
             paysUnionDues,
             darkTheme,
+            ccnlLevel,
           };
           writeLocalSettings(nextSettings);
           queueCloudBackup(readLocalState(), nextSettings);
@@ -2668,6 +2710,7 @@
           const summaryRows = [
             ["Net + vouchers", formatEuro(monthlyPrediction.total)],
             ["Payslip net estimate", formatEuro(monthlyPrediction.payslipNetEstimate.net)],
+            ["Livello CCNL handling", `${ccnlLevel}°`],
             ["Paid hours", `${(monthlyPrediction.paidElapsed / 3600000).toFixed(1)} h`],
             ["Worked hours", `${(monthlyPrediction.workedPaidElapsed / 3600000).toFixed(1)} h`],
             ["Ferie", `${monthlyPrediction.leaveHours.toFixed(1)} h`],
@@ -2749,7 +2792,7 @@
           );
 
           return mergeBreakdowns(prefill.aggregate, liveBreakdown);
-        }, [activeTrackSession, calculateStoredDayPrefill, currentTime, weeklyStats.totalHours]);
+        }, [activeTrackSession, calculateStoredDayPrefill, currentTime, payRates, weeklyStats.totalHours]);
         const todaySavedBreakdown = useMemo(() => {
           const today = formatDateInput(currentTime);
           const todayShifts = effectiveCalendarShifts
@@ -2770,7 +2813,7 @@
             shiftCount: todayShifts.length,
             windows: todayShifts.map((shift) => `${shift.startTime}-${shift.endTime}`),
           };
-        }, [currentTime, effectiveCalendarShifts]);
+        }, [currentTime, effectiveCalendarShifts, payRates]);
         const activeAutoEndLabel = useMemo(() => {
           if (!activeTrackSession?.autoEndTime) return "";
           return new Date(activeTrackSession.autoEndTime).toLocaleTimeString("it-IT", {
@@ -2781,7 +2824,7 @@
         const predictionBreakdown = useMemo(() => {
           const { start, end } = getShiftRange(predictionDate, predictionStartTime, predictionEndTime);
           return calculateBreakdown(start.getTime(), end.getTime(), weeklyStats.totalHours);
-        }, [predictionDate, predictionEndTime, predictionStartTime, weeklyStats.totalHours]);
+        }, [payRates, predictionDate, predictionEndTime, predictionStartTime, weeklyStats.totalHours]);
         const monthlyShifts = useMemo(
           () =>
             [...effectiveCalendarShifts]
@@ -2834,7 +2877,7 @@
               isLeave,
             };
           });
-        }, [calendarMonth, effectiveCalendarShifts]);
+        }, [calendarMonth, effectiveCalendarShifts, payRates]);
         const selectedCalendarDay = useMemo(
           () => calendarDays.find((day) => day.dateValue === calendarDate) || null,
           [calendarDate, calendarDays],
@@ -2977,6 +3020,7 @@
           monthlyShifts,
           monthlyVoucherOverrides,
           calendarMonth,
+          payRates,
           paysForParking,
           paysUnionDues,
         ]);
@@ -3004,7 +3048,7 @@
               totalWithVoucher: breakdown.total + breakdown.mealVoucher,
             };
           });
-        }, [monthlyOrdinaryWorkThreshold, monthlyShifts]);
+        }, [monthlyOrdinaryWorkThreshold, monthlyShifts, payRates]);
         const selectedDayPreviewData = useMemo(
           () => getDayPreviewData(selectedCalendarDay),
           [monthlyShiftBreakdowns, selectedCalendarDay],
@@ -3142,19 +3186,19 @@
           weeklyStats.totalHours + (currentBreakdown?.paidElapsed || 0) / 3600000,
         );
         const liveBaseRateByCode = {
-          ORD: PAYSLIP_REGULAR_HOURLY_RATE,
-          S15: PAYSLIP_S15_RATE,
-          S25: PAYSLIP_S25_RATE,
-          S45: PAYSLIP_S45_RATE,
-          S50: PAYSLIP_S50_RATE,
+          ORD: payRates.regularHourlyRate,
+          S15: payRates.s15Rate,
+          S25: payRates.s25Rate,
+          S45: payRates.s45Rate,
+          S50: payRates.s50Rate,
         };
         const liveNightExtraRate = isNightShift(currentTime)
           ? isSundayOrHoliday(currentTime)
-            ? PAYSLIP_NTD_RATE
-            : PAYSLIP_NTT_RATE
+            ? payRates.ntdRate
+            : payRates.nttRate
           : 0;
         const liveRate =
-          (liveBaseRateByCode[livePayCode] || PAYSLIP_REGULAR_HOURLY_RATE) +
+          (liveBaseRateByCode[livePayCode] || payRates.regularHourlyRate) +
           (isNightShift(currentTime) && livePayCode !== "S50" && livePayCode !== "S45" ? liveNightExtraRate : 0);
         const activeTheme = DARK_THEMES[darkTheme] || DARK_THEMES.classic;
         const renderCalendarShiftEditor = (shift, entry, compact = false) => {
@@ -3408,11 +3452,11 @@
                     <h2 className="mt-2 text-3xl font-black">
                       {accountMode === "create" ? "Crea utente" : "Accedi"}
                     </h2>
-                    <p className="mt-2 text-xs leading-5 text-zinc-400">
-                      {accountMode === "create"
-                        ? "I dati gia presenti in questo browser verranno copiati nel tuo backup privato."
-                        : "I dati del backup verranno uniti a quelli presenti in questo browser."}
-                    </p>
+                    {accountMode === "login" && (
+                      <p className="mt-2 text-xs leading-5 text-zinc-400">
+                        I dati del backup verranno uniti a quelli presenti in questo browser.
+                      </p>
+                    )}
                   </div>
 
                   <label className="block">
@@ -3510,9 +3554,6 @@
                   >
                     {accountMode === "create" ? "Hai gia un utente? Accedi" : "Nuovo utente? Crealo"}
                   </button>
-                  <p className="mt-4 text-center text-[10px] leading-4 text-zinc-600">
-                    Il PIN ha 4 cifre: scegli una combinazione non ovvia e non usarla per conti importanti.
-                  </p>
                 </section>
               </div>
             )}
@@ -3638,6 +3679,38 @@
                               className="w-full rounded border border-white/10 bg-black/40 px-3 py-3 text-sm font-bold text-white"
                             />
                           </label>
+                          <div>
+                            <span className="mb-2 block text-[10px] font-bold uppercase tracking-widest text-zinc-500">
+                              Livello CCNL aeroportuale handling
+                            </span>
+                            <div className="grid grid-cols-2 gap-2">
+                              {["9", "8"].map((level) => {
+                                const profile = CCNL_LEVEL_PROFILES[level];
+                                return (
+                                  <button
+                                    key={level}
+                                    type="button"
+                                    onClick={() => setCcnlLevel(level)}
+                                    className={`rounded border px-3 py-3 text-left transition ${
+                                      ccnlLevel === level
+                                        ? "themed-active"
+                                        : "border-white/10 bg-black/20 text-zinc-300 hover:border-white/20 hover:text-white"
+                                    }`}
+                                  >
+                                    <span className="block text-xs font-black uppercase tracking-widest">
+                                      {profile.label}
+                                    </span>
+                                    <span className="mt-1 block text-[9px] font-bold leading-relaxed text-zinc-500">
+                                      {profile.description}
+                                    </span>
+                                  </button>
+                                );
+                              })}
+                            </div>
+                            <p className="mt-2 text-[10px] leading-relaxed text-zinc-500">
+                              L'8° livello usa una stima di circa +15,13% sulle voci retributive. Buoni, parcheggio e aliquote restano invariati.
+                            </p>
+                          </div>
                           <div>
                             <span className="mb-2 block text-[10px] font-bold uppercase tracking-widest text-zinc-500">
                               Tema scuro
