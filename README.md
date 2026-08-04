@@ -39,9 +39,9 @@ The calculator uses these payslip-derived rules:
 - In the monthly planner, `S15`/extra night weekday hours are guessed after the payslip ordinary monthly quota of `130` paid hours; `S25` still follows the 38.5h weekly overtime threshold
 - `NTT`: weekday night premium, +50% of base, between 20:00 and 08:00
 - `NTD`: Sunday/holiday night premium, +55% of base, between 20:00 and 08:00
-- `Pausa pranzo`: 30 unpaid minutes are deducted from paid time once a shift reaches 7 hours, including exactly 7 hours
+- `Pausa pranzo`: at most 30 unpaid minutes are deducted per work day once its combined shifts reach 7 hours, including exactly 7 hours
 - Monthly calendar total subtracts a `46.00` parking deduction from earnings when the month has shifts
-- Food vouchers are `8.00` per shift with a total span of at least 6 hours; the monthly headline includes them, and the breakdown still shows vouchers separately from earnings
+- Food vouchers are `8.00` per work day whose combined shifts reach at least 6 hours; the monthly headline includes them, and the breakdown still shows vouchers separately from earnings
 - Payslip net estimate uses March 2026-calibrated payroll assumptions: `920.77 / 130` regular hourly pay, payslip rates for `S15`/`S50`/`S25`/`NTT`/`NTD`, daily turnista allowances, visible INPS/IRPEF/substitute-tax deductions, `101.91` treatment credit, `53.15` L.207/24 indemnity, and `0.44` rounding
 
 ## Firebase

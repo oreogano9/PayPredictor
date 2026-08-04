@@ -1,5 +1,5 @@
 <!doctype html>
-<html lang="en">
+<html lang="it">
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
@@ -16,8 +16,8 @@
         },
       };
     </script>
-    <script src="https://unpkg.com/react@18/umd/react.development.js" crossorigin></script>
-    <script src="https://unpkg.com/react-dom@18/umd/react-dom.development.js" crossorigin></script>
+    <script src="https://unpkg.com/react@18/umd/react.production.min.js" crossorigin></script>
+    <script src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js" crossorigin></script>
     <script src="https://unpkg.com/@babel/standalone@7.25.7/babel.min.js"></script>
     <script src="https://www.gstatic.com/firebasejs/10.12.5/firebase-app-compat.js"></script>
     <script src="https://www.gstatic.com/firebasejs/10.12.5/firebase-auth-compat.js"></script>
@@ -192,13 +192,11 @@
           label: "9° livello",
           factor: 1,
           fullTimeMonthlyMinimum: 1181.69,
-          description: "Valori calibrati sulle buste paga inserite",
         },
         "8": {
           label: "8° livello",
           factor: 1360.49 / 1181.69,
           fullTimeMonthlyMinimum: 1360.49,
-          description: "Stima dalla tabella CCNL handling dello stesso periodo",
         },
       };
       const HOURS_EPSILON = 0.000001;
@@ -1124,13 +1122,19 @@
           const dtStartValue = getIcsField(eventText, "DTSTART");
           const dtEndValue = getIcsField(eventText, "DTEND");
           const summary = decodeIcsText(getIcsField(eventText, "SUMMARY"));
+          const uid = decodeIcsText(getIcsField(eventText, "UID"));
+          const recurrenceId = getIcsField(eventText, "RECURRENCE-ID");
+          const status = getIcsField(eventText, "STATUS").toUpperCase();
           const isAllDay = /DTSTART;VALUE=DATE/i.test(eventText) || /DTEND;VALUE=DATE/i.test(eventText);
           const start = parseIcsDateValue(dtStartValue);
           const end = parseIcsDateValue(dtEndValue);
           const isSickLeave = isSickLeaveSummary(summary);
           const isPaidLeave = isPaidLeaveSummary(summary);
+          const eventIdentity = encodeURIComponent(
+            [uid || `event-${index}`, recurrenceId || dtStartValue].filter(Boolean).join("|"),
+          );
 
-          if (!dtStartValue || (!dtEndValue && !isSickLeave && !isPaidLeave)) {
+          if (status === "CANCELLED" || !dtStartValue || (!dtEndValue && !isSickLeave && !isPaidLeave)) {
             return;
           }
 
@@ -1138,7 +1142,8 @@
             const sickDates = enumerateIcsDates(start, end, isAllDay);
             sickDates.forEach((dateValue, sickIndex) => {
               shifts.push({
-                id: `ical-sick-${dateValue}-${index}-${sickIndex}`,
+                id: `ical-sick-${eventIdentity}-${dateValue}-${sickIndex}`,
+                legacyId: `ical-sick-${dateValue}-${index}-${sickIndex}`,
                 date: dateValue,
                 startTime: "00:00",
                 endTime: "00:00",
@@ -1154,7 +1159,8 @@
             const leaveDates = enumerateIcsDates(start, end, isAllDay);
             leaveDates.forEach((dateValue, leaveIndex) => {
               shifts.push({
-                id: `ical-leave-${dateValue}-${index}-${leaveIndex}`,
+                id: `ical-leave-${eventIdentity}-${dateValue}-${leaveIndex}`,
+                legacyId: `ical-leave-${dateValue}-${index}-${leaveIndex}`,
                 date: dateValue,
                 startTime: "00:00",
                 endTime: "00:00",
@@ -1177,7 +1183,8 @@
           }
 
           shifts.push({
-            id: `ical-${formatDateInput(start)}-${formatTimeInput(start)}-${index}`,
+            id: `ical-${eventIdentity}`,
+            legacyId: `ical-${formatDateInput(start)}-${formatTimeInput(start)}-${index}`,
             date: formatDateInput(start),
             startTime: formatTimeInput(start),
             endTime: formatTimeInput(end),
@@ -1361,6 +1368,7 @@
         const [loading, setLoading] = useState(true);
         const [services, setServices] = useState(null);
         const isLocalMode = !firebaseConfig;
+        const canDismissAccountPrompt = ["localhost", "127.0.0.1"].includes(window.location.hostname);
         const payRates = useMemo(
           () => getCcnlPayRates(calculationCcnlLevel),
           [calculationCcnlLevel],
@@ -1654,7 +1662,7 @@
         }, [isLocalMode, services, user]);
 
         useEffect(() => {
-          const timer = setInterval(() => setCurrentTime(new Date()), 100);
+          const timer = setInterval(() => setCurrentTime(new Date()), 1000);
           return () => clearInterval(timer);
         }, []);
 
@@ -1762,19 +1770,12 @@
               const text = await response.text();
               const shifts = parsePublicIcsToShifts(text);
               if (cancelled) return;
-              const localShiftsWithoutSeeds = calendarShifts.filter((shift) => !isSeededTestShift(shift));
-              if (!cleanedSeedShiftsRef.current && localShiftsWithoutSeeds.length !== calendarShifts.length) {
-                cleanedSeedShiftsRef.current = true;
-                setCalendarShifts(localShiftsWithoutSeeds);
-                await saveState({ calendarShifts: localShiftsWithoutSeeds });
-              }
               setImportedCalendarShifts(shifts);
               setIcalSyncStatus(`Calendario importato: ${shifts.length} voci lette`);
             } catch (error) {
               console.error("Errore sync iCal", error);
               if (cancelled) return;
-              setImportedCalendarShifts([]);
-              setIcalSyncStatus("Impossibile leggere l'iCal tramite proxy.");
+              setIcalSyncStatus("Aggiornamento iCal non riuscito: mantengo gli ultimi turni caricati.");
             }
           };
 
@@ -1782,7 +1783,16 @@
           return () => {
             cancelled = true;
           };
-        }, [calendarShifts, googleCalendarIcsUrl]);
+        }, [googleCalendarIcsUrl]);
+
+        useEffect(() => {
+          if (!user || cleanedSeedShiftsRef.current || calendarShifts.length === 0) return;
+          cleanedSeedShiftsRef.current = true;
+          const localShiftsWithoutSeeds = calendarShifts.filter((shift) => !isSeededTestShift(shift));
+          if (localShiftsWithoutSeeds.length === calendarShifts.length) return;
+          setCalendarShifts(localShiftsWithoutSeeds);
+          saveState({ calendarShifts: localShiftsWithoutSeeds });
+        }, [calendarShifts, user]);
 
         const allCalendarShifts = useMemo(
           () => {
@@ -1792,8 +1802,12 @@
               localShifts.map((shift) => shift.originalId).filter(Boolean),
             );
             [
+              ...importedCalendarShifts.filter(
+                (shift) =>
+                  !overriddenImportedIds.has(shift.id) &&
+                  !overriddenImportedIds.has(shift.legacyId),
+              ),
               ...localShifts,
-              ...importedCalendarShifts.filter((shift) => !overriddenImportedIds.has(shift.id)),
             ].forEach((shift) => {
               const key = [
                 shift.kind || "work",
@@ -1850,8 +1864,9 @@
               if (end.getTime() > cutoffMs) {
                 continue;
               }
-              const breakdown = calculateShiftBreakdown(
+              const breakdown = calculateDailyShiftBreakdown(
                 shift,
+                dayShifts,
                 baseWeeklyHours + paidHoursBefore,
                 baseWeeklyHours + paidHoursBefore,
               );
@@ -1931,6 +1946,7 @@
           regularScopeHoursBefore = 0,
           weeklyHoursBefore = regularScopeHoursBefore,
           regularThreshold = WEEKLY_GOAL_HOURS,
+          unpaidBreakOverrideMs = null,
         ) => {
           let base = 0;
           let nightWeekdayExtra = 0;
@@ -1946,7 +1962,12 @@
           };
           const step = 60000;
           const elapsed = endMs - startMs;
-          const unpaidBreakMs = elapsed >= UNPAID_BREAK_THRESHOLD ? UNPAID_BREAK_DURATION : 0;
+          const unpaidBreakMs =
+            unpaidBreakOverrideMs === null
+              ? elapsed >= UNPAID_BREAK_THRESHOLD
+                ? UNPAID_BREAK_DURATION
+                : 0
+              : Math.max(0, Math.min(elapsed, unpaidBreakOverrideMs));
           const breakEndMs = unpaidBreakMs > 0 ? startMs + elapsed / 2 : null;
           const breakStartMs = breakEndMs === null ? null : breakEndMs - unpaidBreakMs;
           const payableDurationHours = Math.max(0, elapsed - unpaidBreakMs) / 3600000;
@@ -2228,6 +2249,7 @@
           regularScopeHoursBefore = 0,
           weeklyHoursBefore = regularScopeHoursBefore,
           regularThreshold = WEEKLY_GOAL_HOURS,
+          unpaidBreakOverrideMs = null,
         ) => {
           const { start, end } = getShiftRange(shift.date, shift.startTime, shift.endTime);
           if (isAbsenceShift(shift)) {
@@ -2249,7 +2271,60 @@
             regularScopeHoursBefore,
             weeklyHoursBefore,
             regularThreshold,
+            unpaidBreakOverrideMs,
           );
+        };
+
+        const calculateDailyShiftBreakdown = (
+          shift,
+          dayShifts,
+          regularScopeHoursBefore = 0,
+          weeklyHoursBefore = regularScopeHoursBefore,
+          regularThreshold = WEEKLY_GOAL_HOURS,
+        ) => {
+          if (isAbsenceShift(shift)) {
+            return calculateShiftBreakdown(
+              shift,
+              regularScopeHoursBefore,
+              weeklyHoursBefore,
+              regularThreshold,
+            );
+          }
+
+          const workedShifts = dayShifts
+            .filter((candidate) => !isAbsenceShift(candidate))
+            .sort((left, right) => left.startTime.localeCompare(right.startTime));
+          const workedDurations = workedShifts.map((candidate) => {
+            const range = getShiftRange(candidate.date, candidate.startTime, candidate.endTime);
+            return { shift: candidate, elapsed: range.end.getTime() - range.start.getTime() };
+          });
+          const workedElapsed = workedDurations.reduce((total, entry) => total + entry.elapsed, 0);
+          const voucherOwner = workedShifts[0];
+          const breakOwner = workedDurations.reduce(
+            (longest, entry) => (!longest || entry.elapsed > longest.elapsed ? entry : longest),
+            null,
+          )?.shift;
+          const isSameShift = (candidate) =>
+            candidate === shift ||
+            (candidate?.id && shift.id && candidate.id === shift.id);
+          const isVoucherOwner =
+            workedElapsed >= MEAL_VOUCHER_THRESHOLD && isSameShift(voucherOwner);
+          const unpaidBreakMs =
+            workedElapsed >= UNPAID_BREAK_THRESHOLD && isSameShift(breakOwner)
+              ? UNPAID_BREAK_DURATION
+              : 0;
+          const breakdown = calculateShiftBreakdown(
+            shift,
+            regularScopeHoursBefore,
+            weeklyHoursBefore,
+            regularThreshold,
+            unpaidBreakMs,
+          );
+
+          return {
+            ...breakdown,
+            mealVoucher: isVoucherOwner ? MEAL_VOUCHER_AMOUNT : 0,
+          };
         };
 
         const getWeekKey = (dateValue) => {
@@ -2355,7 +2430,11 @@
         const applyImportedEventsToCalendar = async () => {
           if (!user || importedEventsPreview.length === 0) return;
           const importedShifts = extractedEventsToCalendarShifts(importedEventsPreview);
-          const importedMonths = new Set(importedEventsPreview.map((event) => event.date.slice(0, 7)));
+          if (importedShifts.length === 0) {
+            setImportStatus("Nessun turno o giorno di malattia da aggiungere");
+            return;
+          }
+          const importedMonths = new Set(importedShifts.map((shift) => shift.date.slice(0, 7)));
           const preservedShifts = calendarShifts.filter(
             (shift) =>
               shift.source !== "local-extracted" ||
@@ -2470,8 +2549,23 @@
               const noteTail = noteCode ? String(event.note || "").replace(noteCode[0], "").trim() : event.note;
               mainText += importShowShiftCode && noteCode ? `${noteCode[1]} (${windowText})` : `Turno (${windowText})`;
               if (noteTail && noteTail !== "Orario esplicito") detailText = noteTail;
-              const breakdown = calculateShiftBreakdown(
-                { date: event.date, startTime: event.startTime, endTime: event.endTime },
+              const previewShift = {
+                id: event.id,
+                date: event.date,
+                startTime: event.startTime,
+                endTime: event.endTime,
+              };
+              const previewDayShifts = sortedEvents
+                .filter((candidate) => candidate.kind === "work" && candidate.date === event.date)
+                .map((candidate) => ({
+                  id: candidate.id,
+                  date: candidate.date,
+                  startTime: candidate.startTime,
+                  endTime: candidate.endTime,
+                }));
+              const breakdown = calculateDailyShiftBreakdown(
+                previewShift,
+                previewDayShifts,
                 0,
                 0,
               );
@@ -2523,8 +2617,16 @@
             const shift =
               event.kind === "sick"
                 ? createSickWorkShift(event.date)
-                : { date: event.date, startTime: event.startTime, endTime: event.endTime };
-            const breakdown = calculateShiftBreakdown(shift, 0, 0);
+                : { id: event.id, date: event.date, startTime: event.startTime, endTime: event.endTime };
+            const dayShifts = importedEventsPreview
+              .filter((candidate) => candidate.kind === "work" && candidate.date === event.date)
+              .map((candidate) => ({
+                id: candidate.id,
+                date: candidate.date,
+                startTime: candidate.startTime,
+                endTime: candidate.endTime,
+              }));
+            const breakdown = calculateDailyShiftBreakdown(shift, dayShifts, 0, 0);
             const hours = breakdown.elapsed / 3600000;
             totalHours += hours;
             months[monthLabel] = (months[monthLabel] || 0) + hours;
@@ -2682,21 +2784,10 @@
           await saveState({ calendarShifts: nextShifts });
         };
 
-        const setMonthlyVoucherOverride = async (value) => {
-          const nextOverrides = { ...monthlyVoucherOverrides };
-          if (value === "") {
-            delete nextOverrides[calendarMonth];
-          } else {
-            nextOverrides[calendarMonth] = Math.max(0, Math.round(Number(value) || 0));
-          }
-          setMonthlyVoucherOverrides(nextOverrides);
-          await saveState({ monthlyVoucherOverrides: nextOverrides });
-        };
-
         const getShiftBreakdownEntry = (shift) => {
           const monthlyEntry = monthlyShiftBreakdowns.find((entry) => entry.shift.id === shift.id);
           if (monthlyEntry) return monthlyEntry;
-          const breakdown = calculateShiftBreakdown(shift, 0, 0);
+          const breakdown = calculateDailyShiftBreakdown(shift, [shift], 0, 0);
           return {
             shift,
             breakdown,
@@ -2865,7 +2956,11 @@
             weeklyStats.totalHours + prefill.paidHoursBefore,
           );
 
-          return mergeBreakdowns(prefill.aggregate, liveBreakdown);
+          const combined = mergeBreakdowns(prefill.aggregate, liveBreakdown);
+          return {
+            ...combined,
+            mealVoucher: combined.elapsed >= MEAL_VOUCHER_THRESHOLD ? MEAL_VOUCHER_AMOUNT : 0,
+          };
         }, [activeTrackSession, calculateStoredDayPrefill, currentTime, payRates, weeklyStats.totalHours]);
         const todaySavedBreakdown = useMemo(() => {
           const today = formatDateInput(currentTime);
@@ -2876,7 +2971,12 @@
           let paidHoursBefore = 0;
 
           for (const shift of todayShifts) {
-            const breakdown = calculateShiftBreakdown(shift, paidHoursBefore, paidHoursBefore);
+            const breakdown = calculateDailyShiftBreakdown(
+              shift,
+              todayShifts,
+              paidHoursBefore,
+              paidHoursBefore,
+            );
             aggregate = mergeBreakdowns(aggregate, breakdown);
             paidHoursBefore += breakdown.paidElapsed / 3600000;
           }
@@ -2926,7 +3026,7 @@
             const isLeave = leaveShifts.length > 0;
             const summary = shifts.reduce(
               (acc, shift) => {
-                const breakdown = calculateShiftBreakdown(shift, 0, 0);
+                const breakdown = calculateDailyShiftBreakdown(shift, shifts, 0, 0);
                 acc.total += breakdown.total + breakdown.mealVoucher;
                 acc.displayHours += breakdown.elapsed / 3600000;
                 acc.hasNightShift =
@@ -3016,8 +3116,9 @@
 
           for (const shift of monthlyShifts) {
             const weekKey = getWeekKey(shift.date);
-            const breakdown = calculateShiftBreakdown(
+            const breakdown = calculateDailyShiftBreakdown(
               shift,
+              monthlyShifts.filter((candidate) => candidate.date === shift.date),
               monthlyWorkedHoursBefore,
               weeklyHoursByKey[weekKey] || 0,
               monthlyOrdinaryWorkThreshold,
@@ -3043,11 +3144,6 @@
             }
           }
 
-          const automaticFoodVouchers = foodVouchers;
-          const voucherOverrideCount = monthlyVoucherOverrides[calendarMonth];
-          if (Number.isFinite(voucherOverrideCount)) {
-            foodVouchers = voucherOverrideCount * MEAL_VOUCHER_AMOUNT;
-          }
           const effectiveHolidayRestDates = monthlyShifts.length > 0 ? holidayRestDates : [];
           const earningsTotal = total;
           const parkingDeduction = monthlyShifts.length > 0 && paysForParking ? MONTHLY_PARKING_DEDUCTION : 0;
@@ -3069,8 +3165,6 @@
             earningsTotal,
             parkingDeduction,
             foodVouchers,
-            automaticFoodVouchers,
-            voucherOverrideCount,
             payslipNetEstimate,
             paidElapsed,
             workedPaidElapsed,
@@ -3092,8 +3186,6 @@
           holidayRestDates,
           monthlyOrdinaryWorkThreshold,
           monthlyShifts,
-          monthlyVoucherOverrides,
-          calendarMonth,
           payRates,
           paysForParking,
           paysUnionDues,
@@ -3104,8 +3196,9 @@
 
           return monthlyShifts.map((shift) => {
             const weekKey = getWeekKey(shift.date);
-            const breakdown = calculateShiftBreakdown(
+            const breakdown = calculateDailyShiftBreakdown(
               shift,
+              monthlyShifts.filter((candidate) => candidate.date === shift.date),
               monthlyWorkedHoursBefore,
               weeklyHoursByKey[weekKey] || 0,
               monthlyOrdinaryWorkThreshold,
@@ -3518,7 +3611,18 @@
 
             {accountPromptOpen && (
               <div className="fixed inset-0 z-50 flex items-center justify-center overflow-y-auto bg-black/90 p-4">
-                <section className="my-auto w-full max-w-sm rounded border border-white/15 bg-zinc-950 p-5 shadow-2xl sm:p-7">
+                <section className="relative my-auto w-full max-w-sm rounded border border-white/15 bg-zinc-950 p-5 shadow-2xl sm:p-7">
+                  {canDismissAccountPrompt && (
+                    <button
+                      type="button"
+                      onClick={() => setAccountPromptOpen(false)}
+                      aria-label="Chiudi accesso di prova"
+                      title="Solo in locale"
+                      className="absolute right-3 top-3 flex h-9 w-9 items-center justify-center rounded border border-white/10 bg-white/[0.03] text-xl text-zinc-400 transition hover:bg-white/[0.08] hover:text-white"
+                    >
+                      ×
+                    </button>
+                  )}
                   <div className="mb-6 text-center">
                     <p className="text-[10px] font-black uppercase tracking-widest themed-text">
                       Backup personale
@@ -3847,16 +3951,10 @@
                                     <span className="block text-xs font-black uppercase tracking-widest">
                                       {profile.label}
                                     </span>
-                                    <span className="mt-1 block text-[9px] font-bold leading-relaxed text-zinc-500">
-                                      {profile.description}
-                                    </span>
                                   </button>
                                 );
                               })}
                             </div>
-                            <p className="mt-2 text-[10px] leading-relaxed text-zinc-500">
-                              L'8° livello usa una stima di circa +15,13% sulle voci retributive. Buoni, parcheggio e aliquote restano invariati.
-                            </p>
                           </div>
                           <div>
                             <span className="mb-2 block text-[10px] font-bold uppercase tracking-widest text-zinc-500">
@@ -4046,7 +4144,7 @@
 
                           <div className="space-y-4">
                             <div className="rounded border border-white/10 bg-black/30 p-4">
-                              <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+                              <div className="flex items-center gap-2">
                                 <div className="flex items-center gap-2">
                                   <span className="flex h-6 w-6 items-center justify-center rounded themed-soft text-xs font-black">
                                     3
@@ -4055,7 +4153,15 @@
                                     Riepilogo
                                   </p>
                                 </div>
-                                <div className="grid grid-cols-2 gap-x-4 gap-y-2 text-[10px] font-black uppercase tracking-widest text-zinc-400">
+                              </div>
+
+                              <details className="group mt-4 rounded border border-white/[0.07] bg-white/[0.02]">
+                                <summary className="flex cursor-pointer list-none items-center justify-between gap-3 px-3 py-2 text-[9px] font-black uppercase tracking-widest text-zinc-400">
+                                  <span>Opzioni anteprima</span>
+                                  <span className="text-zinc-600 transition group-open:rotate-180">⌄</span>
+                                </summary>
+                                <div className="border-t border-white/[0.07] p-3">
+                                  <div className="grid grid-cols-2 gap-x-4 gap-y-2 text-[10px] font-black uppercase tracking-widest text-zinc-400">
                                   {[
                                     ["codici", importShowShiftCode, setImportShowShiftCode],
                                     ["giorni", importShowWeekdays, setImportShowWeekdays],
@@ -4071,8 +4177,26 @@
                                       {label}
                                     </label>
                                   ))}
+                                  </div>
+                                  <div className="mt-3 flex items-center gap-3 border-t border-white/[0.07] pt-3">
+                                    <span className="whitespace-nowrap text-[9px] font-black uppercase tracking-widest text-zinc-500">
+                                      Dimensione testo
+                                    </span>
+                                    <input
+                                      type="range"
+                                      min="8"
+                                      max="16"
+                                      step="1"
+                                      value={importOutputFontSize}
+                                      onChange={(event) => setImportOutputFontSize(Number(event.target.value))}
+                                      className="w-full themed-accent"
+                                    />
+                                    <span className="w-6 text-right text-[10px] font-black text-zinc-400">
+                                      {importOutputFontSize}
+                                    </span>
+                                  </div>
                                 </div>
-                              </div>
+                              </details>
 
                               <div
                                 className="mt-4 min-h-48 rounded border border-white/10 bg-white/[0.03] p-3 font-mono leading-tight"
@@ -4132,31 +4256,19 @@
                                 )}
                               </div>
 
-                              <div className="mt-3 flex items-center gap-3 rounded border border-white/10 bg-black/30 px-3 py-2">
-                                <span className="whitespace-nowrap text-[9px] font-black uppercase tracking-widest text-zinc-500">
-                                  Dimensione
-                                </span>
-                                <input
-                                  type="range"
-                                  min="8"
-                                  max="16"
-                                  step="1"
-                                  value={importOutputFontSize}
-                                  onChange={(event) => setImportOutputFontSize(Number(event.target.value))}
-                                  className="w-full themed-accent"
-                                />
-                                <span className="w-6 text-right text-[10px] font-black text-zinc-400">
-                                  {importOutputFontSize}
-                                </span>
-                              </div>
                             </div>
 
                             {(Object.keys(importTotals.months).length > 0 || importTotals.weeks.length > 0) && (
-                              <div className="rounded border border-white/10 bg-black/30 p-4">
-                                <p className="mb-3 text-xs font-black uppercase tracking-widest text-white">
-                                  Ore totali
-                                </p>
-                                <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                              <details className="group rounded border border-white/10 bg-black/30">
+                                <summary className="flex cursor-pointer list-none items-center justify-between gap-3 px-4 py-3">
+                                  <span className="text-[10px] font-black uppercase tracking-widest text-zinc-300">Totali importazione</span>
+                                  <span className="flex items-center gap-2 text-[9px] font-black uppercase tracking-widest text-zinc-500">
+                                    {importTotals.workEvents} turni · {importTotals.totalHours.toFixed(1)}h
+                                    <span className="transition group-open:rotate-180">⌄</span>
+                                  </span>
+                                </summary>
+                                <div className="border-t border-white/[0.07] p-4">
+                                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                                   <div>
                                     <p className="mb-2 border-b border-white/10 pb-1 text-[9px] font-black uppercase tracking-widest text-zinc-500">
                                       Mensili
@@ -4192,53 +4304,62 @@
                                     </>
                                   )}
                                 </div>
-                              </div>
+                                </div>
+                              </details>
                             )}
 
-                            <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+                            <div className="space-y-2">
                               <button
                                 onClick={applyImportedEventsToCalendar}
-                                disabled={importedEventsPreview.length === 0}
-                                className={`rounded border px-4 py-4 text-[11px] font-black uppercase tracking-widest transition ${
-                                  importedEventsPreview.length === 0
+                                disabled={!importedEventsPreview.some((event) => event.kind === "work" || event.kind === "sick")}
+                                className={`w-full rounded border px-4 py-4 text-[11px] font-black uppercase tracking-widest transition ${
+                                  !importedEventsPreview.some((event) => event.kind === "work" || event.kind === "sick")
                                     ? "cursor-not-allowed border-white/10 text-zinc-600"
                                     : "themed-primary themed-shadow ring-2 ring-white/10 hover:ring-white/25"
                                 }`}
                               >
                                 Usa nel calendario
                               </button>
-                              <button
-                                onClick={copyImportOutput}
-                                disabled={!importOutputText.trim()}
-                                className={`rounded border px-4 py-3 text-[10px] font-black uppercase tracking-widest transition ${
-                                  !importOutputText.trim()
-                                    ? "cursor-not-allowed border-white/10 text-zinc-600"
-                                    : importCopied
-                                      ? "border-emerald-300/30 bg-emerald-400/10 text-emerald-200"
-                                      : "border-white/10 text-zinc-300 hover:text-white"
-                                }`}
-                              >
-                                {importCopied ? "Copiato" : "Copia testo"}
-                              </button>
-                              <button
-                                onClick={exportImportedEventsToGoogleCsv}
-                                disabled={importedEventsPreview.length === 0}
-                                className={`rounded border px-4 py-3 text-[10px] font-black uppercase tracking-widest transition ${
-                                  importedEventsPreview.length === 0
-                                    ? "cursor-not-allowed border-white/10 text-zinc-600"
-                                    : "border-white/10 text-zinc-300 hover:text-white"
-                                }`}
-                              >
-                                CSV Google
-                              </button>
-                              <a
-                                href="https://calendar.google.com/calendar/u/0/r/settings/export"
-                                target="_blank"
-                                rel="noreferrer"
-                                className="rounded border border-white/10 px-4 py-3 text-center text-[10px] font-black uppercase tracking-widest text-zinc-300 hover:text-white"
-                              >
-                                Apri Google Calendar
-                              </a>
+                              <details className="group rounded border border-white/[0.08] bg-white/[0.02]">
+                                <summary className="flex cursor-pointer list-none items-center justify-between gap-3 px-3 py-3 text-[9px] font-black uppercase tracking-widest text-zinc-500">
+                                  <span>Esporta o copia</span>
+                                  <span className="transition group-open:rotate-180">⌄</span>
+                                </summary>
+                                <div className="grid grid-cols-1 gap-2 border-t border-white/[0.07] p-2 sm:grid-cols-3">
+                                  <button
+                                    onClick={copyImportOutput}
+                                    disabled={!importOutputText.trim()}
+                                    className={`rounded border px-4 py-3 text-[10px] font-black uppercase tracking-widest transition ${
+                                      !importOutputText.trim()
+                                        ? "cursor-not-allowed border-white/10 text-zinc-600"
+                                        : importCopied
+                                          ? "border-emerald-300/30 bg-emerald-400/10 text-emerald-200"
+                                          : "border-white/10 text-zinc-300 hover:text-white"
+                                    }`}
+                                  >
+                                    {importCopied ? "Copiato" : "Copia testo"}
+                                  </button>
+                                  <button
+                                    onClick={exportImportedEventsToGoogleCsv}
+                                    disabled={importedEventsPreview.length === 0}
+                                    className={`rounded border px-4 py-3 text-[10px] font-black uppercase tracking-widest transition ${
+                                      importedEventsPreview.length === 0
+                                        ? "cursor-not-allowed border-white/10 text-zinc-600"
+                                        : "border-white/10 text-zinc-300 hover:text-white"
+                                    }`}
+                                  >
+                                    CSV Google
+                                  </button>
+                                  <a
+                                    href="https://calendar.google.com/calendar/u/0/r/settings/export"
+                                    target="_blank"
+                                    rel="noreferrer"
+                                    className="rounded border border-white/10 px-4 py-3 text-center text-[10px] font-black uppercase tracking-widest text-zinc-300 hover:text-white"
+                                  >
+                                    Google Calendar
+                                  </a>
+                                </div>
+                              </details>
                             </div>
                           </div>
                         </div>
@@ -4682,7 +4803,10 @@
                           </div>
 
                           <div className="bg-black/30 border border-white/10 rounded p-4 text-left">
-                            <div className="mb-3 flex justify-end">
+                            <div className="mb-3 flex items-center justify-between gap-3">
+                              <p className="text-[10px] font-black text-zinc-500 uppercase tracking-widest">
+                                Totale mensile stimato
+                              </p>
                               <div
                                 className="inline-flex items-center gap-0.5 rounded border border-white/[0.07] bg-white/[0.02] p-0.5"
                                 title="Confronto temporaneo: non modifica le impostazioni salvate"
@@ -4707,209 +4831,153 @@
                                 ))}
                               </div>
                             </div>
-                            <div className="flex items-start justify-between gap-4 mb-4">
-                              <div>
-                                <p className="text-[10px] font-black text-zinc-500 uppercase tracking-widest mb-2">
-                                  Netto + buoni
-                                </p>
-                                <div className="text-4xl font-black tabular-nums themed-text">
-                                  EUR {monthlyPrediction.total.toLocaleString("it-IT", {
-                                    minimumFractionDigits: 2,
-                                    maximumFractionDigits: 2,
-                                  })}
+                            <div className="mb-4">
+                              <div className="text-4xl font-black tabular-nums themed-text">
+                                EUR {monthlyPrediction.total.toLocaleString("it-IT", {
+                                  minimumFractionDigits: 2,
+                                  maximumFractionDigits: 2,
+                                })}
+                              </div>
+                              <div className="mt-3 flex flex-wrap gap-x-4 gap-y-1 text-[10px] font-bold uppercase tracking-widest text-zinc-500">
+                                <span className="summary-label summary-payroll">
+                                  In busta EUR {monthlyPrediction.payslipNetEstimate.net.toFixed(2)}
+                                </span>
+                                <span className="summary-label summary-voucher">
+                                  Buoni EUR {monthlyPrediction.foodVouchers.toFixed(2)}
+                                </span>
+                                <span>{(monthlyPrediction.paidElapsed / 3600000).toFixed(1)} h pagate</span>
+                              </div>
+                            </div>
+                            <details className="group border-t border-white/10 pt-3">
+                              <summary className="flex cursor-pointer list-none items-center justify-between gap-3 text-[10px] font-black uppercase tracking-widest text-zinc-400">
+                                <span>Dettagli del calcolo</span>
+                                <span className="flex items-center gap-2 text-[9px] text-zinc-600">
+                                  <span className="group-open:hidden">Mostra</span>
+                                  <span className="hidden group-open:inline">Nascondi</span>
+                                  <span className="transition group-open:rotate-180">⌄</span>
+                                </span>
+                              </summary>
+                              <div className="mt-4 border-t border-white/[0.06] pt-2">
+                                <div className="grid grid-cols-2 gap-x-4 sm:grid-cols-3">
+                                  {[
+                                    ["Guadagno turni", `EUR ${monthlyPrediction.earningsTotal.toFixed(2)}`, "summary-earnings"],
+                                    ["Parcheggio", `-EUR ${monthlyPrediction.parkingDeduction.toFixed(2)}`, "text-rose-200/80"],
+                                    ["Dopo parcheggio", `EUR ${monthlyPrediction.incomeAfterParking.toFixed(2)}`, "summary-after"],
+                                    ["Lordo busta", `EUR ${monthlyPrediction.payslipNetEstimate.grossPayroll.toFixed(2)}`, "summary-payroll"],
+                                    ["Buoni pasto", `EUR ${monthlyPrediction.foodVouchers.toFixed(2)}`, "summary-voucher"],
+                                    ["Ore notturne", `${getTotalNightHours(monthlyPrediction).toFixed(2)}h`, "summary-night"],
+                                  ].map(([label, value, colorClass]) => (
+                                    <div key={label} className="border-b border-white/[0.06] py-3">
+                                      <p className="text-[8px] font-black uppercase tracking-widest text-zinc-600">{label}</p>
+                                      <p className={`mt-1 text-sm font-black ${colorClass} ${colorClass.startsWith("summary-") ? "summary-value" : ""}`}>
+                                        {value}
+                                      </p>
+                                    </div>
+                                  ))}
                                 </div>
-                                <p className="text-[10px] font-bold uppercase tracking-widest summary-label summary-payroll mt-2">
-                                  Stima netto busta: EUR {monthlyPrediction.payslipNetEstimate.net.toFixed(2)}
-                                </p>
-                              </div>
-                              <div className="text-right text-[10px] font-black uppercase tracking-widest summary-label summary-earnings">
-                                {(monthlyPrediction.paidElapsed / 3600000).toFixed(1)} h pagate
-                              </div>
-                            </div>
-                            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-6 gap-3 mb-4">
-                              <div className="summary-card summary-earnings rounded p-3">
-                                <p className="text-[9px] font-black uppercase tracking-widest summary-label mb-1">
-                                  Guadagno turni
-                                </p>
-                                <p className="text-sm font-black summary-value">
-                                  EUR {monthlyPrediction.earningsTotal.toFixed(2)}
-                                </p>
-                              </div>
-                              <div className="themed-negative rounded p-3">
-                                <p className="text-[9px] font-black uppercase tracking-widest mb-1">
-                                  Parcheggio
-                                </p>
-                                <p className="text-sm font-black">
-                                  -EUR {monthlyPrediction.parkingDeduction.toFixed(2)}
-                                </p>
-                              </div>
-                              <div className="summary-card summary-after rounded p-3">
-                                <p className="text-[9px] font-black uppercase tracking-widest summary-label mb-1">
-                                  Dopo parcheggio
-                                </p>
-                                <p className="text-sm font-black summary-value">
-                                  EUR {monthlyPrediction.incomeAfterParking.toFixed(2)}
-                                </p>
-                              </div>
-                              <div className="summary-card summary-payroll rounded p-3">
-                                <p className="text-[9px] font-black uppercase tracking-widest summary-label mb-1">
-                                  Lordo busta
-                                </p>
-                                <p className="text-sm font-black summary-value">
-                                  EUR {monthlyPrediction.payslipNetEstimate.grossPayroll.toFixed(2)}
-                                </p>
-                              </div>
-                              <div className="summary-card summary-voucher rounded p-3">
-                                <p className="text-[9px] font-black uppercase tracking-widest summary-label mb-1">
-                                  Buoni pasto
-                                </p>
-                                <p className="text-sm font-black summary-value">
-                                  EUR {monthlyPrediction.foodVouchers.toFixed(2)}
-                                </p>
-                                <p className="mt-1 text-[8px] font-bold uppercase tracking-widest summary-label">
-                                  {Number.isFinite(monthlyPrediction.voucherOverrideCount)
-                                    ? `${monthlyPrediction.voucherOverrideCount} manuali`
-                                    : `${monthlyPrediction.automaticFoodVouchers / MEAL_VOUCHER_AMOUNT} automatici`}
-                                </p>
-                              </div>
-                              <div className="summary-card summary-night rounded p-3">
-                                <p className="text-[9px] font-black uppercase tracking-widest summary-label mb-1">
-                                  Ore notturne
-                                </p>
-                                <p className="text-sm font-black summary-value">
-                                  {getTotalNightHours(monthlyPrediction).toFixed(2)}h
-                                </p>
-                              </div>
-                            </div>
-                            <div className="mb-4 flex flex-col gap-2 rounded border border-white/10 bg-white/[0.025] p-3 sm:flex-row sm:items-end">
-                              <label className="flex-1 text-[9px] font-black uppercase tracking-widest text-zinc-500">
-                                Numero buoni pasto effettivi
-                                <input
-                                  type="number"
-                                  min="0"
-                                  step="1"
-                                  value={Number.isFinite(monthlyPrediction.voucherOverrideCount) ? monthlyPrediction.voucherOverrideCount : ""}
-                                  onChange={(event) => setMonthlyVoucherOverride(event.target.value)}
-                                  placeholder={`${monthlyPrediction.automaticFoodVouchers / MEAL_VOUCHER_AMOUNT} automatici`}
-                                  className="mt-2 w-full rounded border border-white/10 bg-black px-3 py-2 text-sm font-black text-white outline-none themed-focus"
-                                />
-                              </label>
-                              <button
-                                type="button"
-                                onClick={() => setMonthlyVoucherOverride("")}
-                                className="rounded border border-white/10 px-3 py-2 text-[9px] font-black uppercase tracking-widest text-zinc-400 hover:text-white"
-                              >
-                                Usa automatico
-                              </button>
-                            </div>
-                            <div className="flex flex-wrap gap-2">
-                              {Object.entries(monthlyPrediction.payCodeTotals)
-                                .filter(([, hours]) => hours > 0)
-                                .map(([code, hours]) => (
-                                  <span
-                                    key={code}
-                                    className="themed-soft text-[9px] font-black px-2 py-1 rounded uppercase tracking-tight"
-                                  >
-                                    {getPayCode(code).label}: {hours.toFixed(2)}h
+                                <div className="mt-4 flex flex-wrap gap-2">
+                                  {Object.entries(monthlyPrediction.payCodeTotals)
+                                    .filter(([, hours]) => hours > 0)
+                                    .map(([code, hours]) => (
+                                      <span key={code} className="themed-soft text-[9px] font-black px-2 py-1 rounded uppercase tracking-tight">
+                                        {getPayCode(code).label}: {hours.toFixed(2)}h
+                                      </span>
+                                    ))}
+                                  {monthlyPrediction.nightWeekdayExtra > 0 && (
+                                    <span className="summary-card summary-night summary-value text-[9px] font-black px-2 py-1 rounded uppercase tracking-tight">
+                                      NTT: +EUR {monthlyPrediction.nightWeekdayExtra.toFixed(2)}
+                                    </span>
+                                  )}
+                                  {monthlyPrediction.nightSundayHolidayExtra > 0 && (
+                                    <span className="summary-card summary-night summary-value text-[9px] font-black px-2 py-1 rounded uppercase tracking-tight">
+                                      NTD: +EUR {monthlyPrediction.nightSundayHolidayExtra.toFixed(2)}
+                                    </span>
+                                  )}
+                                  {monthlyPrediction.unpaidBreakMs > 0 && (
+                                    <span className="themed-negative text-[9px] font-black px-2 py-1 rounded uppercase tracking-tight">
+                                      Pausa pranzo: -{monthlyPrediction.unpaidBreakMs / 60000} min
+                                    </span>
+                                  )}
+                                  {monthlyPrediction.leaveHours > 0 && (
+                                    <span className="rounded border border-sky-300/20 bg-sky-500/[0.06] px-2 py-1 text-[9px] font-black uppercase tracking-tight text-sky-200">
+                                      Ferie: {monthlyPrediction.leaveHours.toFixed(2)}h
+                                    </span>
+                                  )}
+                                  {monthlyPrediction.sickHours > 0 && (
+                                    <span className="rounded border border-rose-300/20 bg-rose-500/[0.06] px-2 py-1 text-[9px] font-black uppercase tracking-tight text-rose-200">
+                                      Malattia: {monthlyPrediction.sickHours.toFixed(2)}h
+                                    </span>
+                                  )}
+                                  {monthlyPrediction.holidayRestDates.length > 0 && (
+                                    <span className="themed-soft text-[9px] font-black px-2 py-1 rounded uppercase tracking-tight">
+                                      Festività in riposo: {monthlyPrediction.holidayRestDates.length} gg
+                                    </span>
+                                  )}
+                                  {monthlyPrediction.payslipNetEstimate.unionDues > 0 && (
+                                    <span className="themed-negative text-[9px] font-black px-2 py-1 rounded uppercase tracking-tight">
+                                      Sindacato: -EUR {monthlyPrediction.payslipNetEstimate.unionDues.toFixed(2)}
+                                    </span>
+                                  )}
+                                  <span className="themed-negative text-[9px] font-black px-2 py-1 rounded uppercase tracking-tight">
+                                    Trattenute busta: -EUR {monthlyPrediction.payslipNetEstimate.totalDeductions.toFixed(2)}
                                   </span>
-                                ))}
-                              {monthlyPrediction.nightWeekdayExtra > 0 && (
-                                <span className="summary-card summary-night summary-value text-[9px] font-black px-2 py-1 rounded uppercase tracking-tight">
-                                  NTT: +EUR {monthlyPrediction.nightWeekdayExtra.toFixed(2)}
-                                </span>
-                              )}
-                              {monthlyPrediction.nightSundayHolidayExtra > 0 && (
-                                <span className="summary-card summary-night summary-value text-[9px] font-black px-2 py-1 rounded uppercase tracking-tight">
-                                  NTD: +EUR {monthlyPrediction.nightSundayHolidayExtra.toFixed(2)}
-                                </span>
-                              )}
-                              {monthlyPrediction.unpaidBreakMs > 0 && (
-                                <span className="themed-negative text-[9px] font-black px-2 py-1 rounded uppercase tracking-tight">
-                                  Pausa pranzo: -{monthlyPrediction.unpaidBreakMs / 60000} min
-                                </span>
-                              )}
-                              {monthlyPrediction.leaveHours > 0 && (
-                                <span className="rounded border border-sky-300/20 bg-sky-500/[0.06] px-2 py-1 text-[9px] font-black uppercase tracking-tight text-sky-200">
-                                  Ferie: {monthlyPrediction.leaveHours.toFixed(2)}h
-                                </span>
-                              )}
-                              {monthlyPrediction.sickHours > 0 && (
-                                <span className="rounded border border-rose-300/20 bg-rose-500/[0.06] px-2 py-1 text-[9px] font-black uppercase tracking-tight text-rose-200">
-                                  Malattia: {monthlyPrediction.sickHours.toFixed(2)}h
-                                </span>
-                              )}
-                              {monthlyPrediction.holidayRestDates.length > 0 && (
-                                <span className="themed-soft text-[9px] font-black px-2 py-1 rounded uppercase tracking-tight">
-                                  Festività in riposo: {monthlyPrediction.holidayRestDates.length} gg
-                                </span>
-                              )}
-                              {monthlyPrediction.payslipNetEstimate.unionDues > 0 && (
-                                <span className="themed-negative text-[9px] font-black px-2 py-1 rounded uppercase tracking-tight">
-                                  Sindacato: -EUR {monthlyPrediction.payslipNetEstimate.unionDues.toFixed(2)}
-                                </span>
-                              )}
-                              <span className="themed-negative text-[9px] font-black px-2 py-1 rounded uppercase tracking-tight">
-                                Trattenute busta: -EUR {monthlyPrediction.payslipNetEstimate.totalDeductions.toFixed(2)}
-                              </span>
-                              <span className="summary-card summary-voucher summary-value text-[9px] font-black px-2 py-1 rounded uppercase tracking-tight">
-                                Crediti busta: +EUR {monthlyPrediction.payslipNetEstimate.totalCredits.toFixed(2)}
-                              </span>
-                            </div>
+                                  <span className="summary-card summary-voucher summary-value text-[9px] font-black px-2 py-1 rounded uppercase tracking-tight">
+                                    Crediti busta: +EUR {monthlyPrediction.payslipNetEstimate.totalCredits.toFixed(2)}
+                                  </span>
+                                </div>
+                              </div>
+                            </details>
                           </div>
 
-                          <div className="space-y-2 text-left">
-                            {monthlyShiftBreakdowns.length === 0 ? (
-                              <p className="text-sm text-zinc-500 text-center py-4">Nessun turno salvato per questo mese.</p>
-                            ) : (
-                              monthlyShiftBreakdowns.map(({ shift, totalWithVoucher }) => {
-                                return (
-                                  <div
-                                    key={shift.id}
-                                    className="flex items-center justify-between gap-3 bg-black/30 border border-white/10 rounded p-3"
-                                  >
+                          <details className="group rounded border border-white/[0.08] bg-black/20 text-left">
+                            <summary className="flex cursor-pointer list-none items-center justify-between gap-3 px-4 py-3">
+                              <div>
+                                <p className="text-[10px] font-black uppercase tracking-widest text-zinc-300">Turni del mese</p>
+                                <p className="mt-1 text-[9px] font-bold uppercase tracking-widest text-zinc-600">
+                                  {monthlyShiftBreakdowns.length} {monthlyShiftBreakdowns.length === 1 ? "turno" : "turni"}
+                                </p>
+                              </div>
+                              <span className="text-zinc-600 transition group-open:rotate-180">⌄</span>
+                            </summary>
+                            <div className="space-y-2 border-t border-white/[0.07] p-3">
+                              {monthlyShiftBreakdowns.length === 0 ? (
+                                <p className="py-3 text-center text-sm text-zinc-500">Nessun turno salvato per questo mese.</p>
+                              ) : (
+                                monthlyShiftBreakdowns.map(({ shift, totalWithVoucher }) => (
+                                  <div key={shift.id} className="flex items-center justify-between gap-3 border-b border-white/[0.06] px-1 py-3 last:border-0">
                                     <div>
                                       <div className="text-sm font-black text-white">
                                         {shift.date} - {shift.startTime}-{shift.endTime}
                                       </div>
-                                      {shift.note && (
-                                        <div className="text-[10px] font-bold uppercase tracking-widest text-zinc-400">
-                                          {shift.note}
-                                        </div>
-                                      )}
+                                      {shift.note && <div className="text-[10px] font-bold uppercase tracking-widest text-zinc-400">{shift.note}</div>}
                                       <div className="text-[10px] font-bold uppercase tracking-widest text-zinc-500">
                                         {isSickShift(shift)
                                           ? "Conteggio malattia"
                                           : isLeaveShift(shift)
                                             ? "Conteggio ferie"
-                                          : shift.source === "local-extracted"
-                                            ? "Importato da PDF o testo"
-                                            : "Importato da iCal"}
-                                      </div>
-                                      <div className="text-[10px] font-bold uppercase tracking-widest text-zinc-500">
-                                        EUR {totalWithVoucher.toFixed(2)} stima
+                                            : shift.source === "local-extracted"
+                                              ? "Importato da PDF o testo"
+                                              : "Importato da iCal"}
                                       </div>
                                     </div>
-                                    <div className="rounded border border-white/10 px-3 py-2 text-[10px] font-black uppercase tracking-widest text-zinc-500">
-                                      Sola lettura
+                                    <div className="text-right">
+                                      <div className="text-xs font-black text-zinc-300">EUR {totalWithVoucher.toFixed(2)}</div>
+                                      <div className="mt-1 text-[8px] font-black uppercase tracking-widest text-zinc-600">Sola lettura</div>
                                     </div>
                                   </div>
-                                );
-                              })
-                            )}
-                          </div>
-                          <div className="space-y-2">
-                            <button
-                              onClick={copyMonthToClipboard}
-                              className="w-full rounded border border-white/10 px-3 py-3 text-[10px] font-black uppercase tracking-widest text-zinc-300 hover:text-white"
-                            >
-                              Copia mese in Markdown
-                            </button>
-                            {copyMonthStatus && (
-                              <p className="text-center text-[10px] font-bold uppercase tracking-widest text-emerald-300">
-                                {copyMonthStatus}
-                              </p>
-                            )}
-                          </div>
+                                ))
+                              )}
+                              <button
+                                onClick={copyMonthToClipboard}
+                                className="w-full rounded border border-white/10 px-3 py-3 text-[10px] font-black uppercase tracking-widest text-zinc-400 hover:text-white"
+                              >
+                                Copia riepilogo
+                              </button>
+                              {copyMonthStatus && (
+                                <p className="text-center text-[10px] font-bold uppercase tracking-widest text-emerald-300">{copyMonthStatus}</p>
+                              )}
+                            </div>
+                          </details>
                             </>
                           ) : (
                             <div className="bg-black/30 border border-white/10 rounded p-4">
