@@ -8,11 +8,23 @@ Open `index.html` in a browser, or serve the folder with any static server.
 
 The app runs in local-storage mode by default, so shifts and weekly totals persist in the current browser without Firebase.
 
+## Vercel user backups
+
+The app keeps using the same local-storage keys as previous releases. Creating an account adds a private Vercel Blob copy and never removes the browser copy.
+
+To enable account backups on Vercel:
+
+1. Create and connect a Blob store with **Private** access.
+2. Add `PAYPREDICTOR_AUTH_SECRET` as an environment variable with a random value of at least 32 characters.
+3. Redeploy after connecting the store and adding the variable.
+
+The normalized username locates the account, the four-digit PIN is stored only as a salted hash, and the browser remembers a signed login token. A four-digit PIN is convenience-level security and should not be reused anywhere else.
+
 The `Track` mode lets you choose the actual start time in 30-minute intervals before starting a shift. The `Predict` mode defaults to today and estimates a day from selected date, start time, and end time. If the end time is earlier than or equal to the start time, the prediction treats it as an overnight shift ending the next day.
 
 The `Calendar` mode shows a month grid. Click a day to load it into the editor, then set start/end times and add or update a shift. Monthly prediction sorts shifts by date, groups paid hours by calendar week, and applies the same automatic pay codes, night premiums, holiday/Sunday rules, and unpaid lunch break rule.
 
-March 2026 payslip shifts and the April 2026 plan are seeded into the calendar when no saved calendar entries exist.
+Applying a PDF replaces only earlier PDF-imported shifts in the same month. Other months, manual shifts, and iCal data are preserved.
 
 ## Pay Rules
 

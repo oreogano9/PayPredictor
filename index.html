@@ -191,6 +191,7 @@
       const HOURS_EPSILON = 0.000001;
       const STORAGE_KEY = `earnings-tracker:${appId}:main`;
       const SETTINGS_STORAGE_KEY = `earnings-tracker:${appId}:settings`;
+      const ACCOUNT_STORAGE_KEY = `earnings-tracker:${appId}:account`;
       const PAY_CODES = {
         ORD: { label: "Ore ordinarie", multiplier: 1 },
         S15: { label: "Ore supplementari 15%", multiplier: SUPPLEMENTAL_15_MULTIPLIER },
@@ -422,6 +423,85 @@
 
       function writeLocalSettings(nextSettings) {
         localStorage.setItem(SETTINGS_STORAGE_KEY, JSON.stringify(nextSettings));
+      }
+
+      function readAccountSession() {
+        try {
+          const saved = JSON.parse(localStorage.getItem(ACCOUNT_STORAGE_KEY));
+          return saved?.token && saved?.name ? saved : null;
+        } catch {
+          return null;
+        }
+      }
+
+      function writeAccountSession(nextSession) {
+        if (!nextSession) {
+          localStorage.removeItem(ACCOUNT_STORAGE_KEY);
+          return;
+        }
+        localStorage.setItem(ACCOUNT_STORAGE_KEY, JSON.stringify(nextSession));
+      }
+
+      function mergeCalendarShiftCollections(remoteShifts, localShifts) {
+        const byId = new Map();
+        [...(remoteShifts || []), ...(localShifts || [])].forEach((shift) => {
+          if (!shift || !shift.date) return;
+          const id = shift.id || [shift.kind || "work", shift.date, shift.startTime, shift.endTime].join("|");
+          byId.set(id, shift);
+        });
+
+        const bySchedule = new Map();
+        [...byId.values()].forEach((shift) => {
+          const key = [shift.kind || "work", shift.date, shift.startTime, shift.endTime, shift.note || ""].join("|");
+          bySchedule.set(key, shift);
+        });
+        return [...bySchedule.values()].sort((a, b) =>
+          `${a.date} ${a.startTime || ""}`.localeCompare(`${b.date} ${b.startTime || ""}`),
+        );
+      }
+
+      function mergeCloudSnapshotWithLocal(cloudData) {
+        const hasLocalState = localStorage.getItem(STORAGE_KEY) !== null;
+        const hasLocalSettings = localStorage.getItem(SETTINGS_STORAGE_KEY) !== null;
+        const localState = readLocalState();
+        const localSettings = readLocalSettings();
+        const cloudState = cloudData?.appState || {};
+        const cloudSettings = cloudData?.settings || {};
+
+        const appState = hasLocalState
+          ? {
+              ...cloudState,
+              ...localState,
+              calendarShifts: mergeCalendarShiftCollections(
+                cloudState.calendarShifts,
+                localState.calendarShifts,
+              ),
+              monthlyVoucherOverrides: {
+                ...(cloudState.monthlyVoucherOverrides || {}),
+                ...(localState.monthlyVoucherOverrides || {}),
+              },
+            }
+          : { ...readLocalState(), ...cloudState };
+        const settings = hasLocalSettings
+          ? { ...cloudSettings, ...localSettings }
+          : { ...readLocalSettings(), ...cloudSettings };
+
+        return { appState, settings };
+      }
+
+      async function callAccountApi(payload) {
+        const response = await fetch("/api/account", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(payload),
+        });
+        const result = await response.json().catch(() => ({}));
+        if (!response.ok) {
+          const error = new Error(result.error || "Backup cloud non disponibile");
+          error.status = response.status;
+          throw error;
+        }
+        return result;
       }
 
       function unfoldIcsLines(text) {
@@ -1198,9 +1278,166 @@
         const previousSelectedCalendarDateRef = useRef("");
         const previousSelectedCalendarShiftRef = useRef("");
         const calendarLongPressTimerRef = useRef(null);
+        const initialAccountSessionRef = useRef(readAccountSession());
+        const accountSessionRef = useRef(initialAccountSessionRef.current);
+        const cloudSaveChainRef = useRef(Promise.resolve());
+        const [accountSession, setAccountSession] = useState(initialAccountSessionRef.current);
+        const [accountPromptOpen, setAccountPromptOpen] = useState(!initialAccountSessionRef.current);
+        const [accountMode, setAccountMode] = useState("create");
+        const [accountName, setAccountName] = useState(initialAccountSessionRef.current?.name || "");
+        const [accountPin, setAccountPin] = useState("");
+        const [accountStatus, setAccountStatus] = useState("");
+        const [accountBusy, setAccountBusy] = useState(false);
+        const [cloudSyncStatus, setCloudSyncStatus] = useState("");
         const [loading, setLoading] = useState(true);
         const [services, setServices] = useState(null);
         const isLocalMode = !firebaseConfig;
+
+        const applySnapshotToBrowser = (snapshot) => {
+          const appState = snapshot?.appState || readLocalState();
+          const settings = snapshot?.settings || readLocalSettings();
+          writeLocalState(appState);
+          writeLocalSettings(settings);
+          setSession(appState.session || null);
+          setWeeklyStats(appState.weeklyStats || { totalHours: 0, totalEarned: 0 });
+          setCalendarShifts(appState.calendarShifts || []);
+          setMonthlyVoucherOverrides(appState.monthlyVoucherOverrides || {});
+          setGoogleCalendarIcsUrl(settings.googleCalendarIcsUrl || "");
+          setPaysForParking(settings.paysForParking !== false);
+          setPaysUnionDues(settings.paysUnionDues !== false);
+          setDarkTheme(DARK_THEMES[settings.darkTheme] ? settings.darkTheme : "classic");
+        };
+
+        const buildCloudSnapshot = (nextAppState, nextSettings) => ({
+          appState: nextAppState || readLocalState(),
+          settings: nextSettings || readLocalSettings(),
+        });
+
+        const queueCloudBackup = (nextAppState, nextSettings) => {
+          const token = accountSessionRef.current?.token;
+          if (!token) return Promise.resolve();
+          const snapshot = buildCloudSnapshot(nextAppState, nextSettings);
+          setCloudSyncStatus("Salvataggio cloud...");
+          cloudSaveChainRef.current = cloudSaveChainRef.current
+            .catch(() => undefined)
+            .then(() => callAccountApi({ action: "save", token, data: snapshot }))
+            .then(() => setCloudSyncStatus("Backup cloud aggiornato"))
+            .catch((error) => {
+              console.error("Errore backup cloud", error);
+              if (error.status === 401) {
+                accountSessionRef.current = null;
+                setAccountSession(null);
+                writeAccountSession(null);
+                setAccountMode("login");
+                setAccountPromptOpen(true);
+                setAccountStatus("Accesso scaduto. Inserisci di nuovo nome e PIN.");
+              }
+              setCloudSyncStatus("Backup cloud non riuscito: i dati locali sono al sicuro");
+            });
+          return cloudSaveChainRef.current;
+        };
+
+        const completeAccountAccess = async (result, shouldMerge) => {
+          const nextAccountSession = { name: result.name, token: result.token };
+          const snapshot = shouldMerge
+            ? mergeCloudSnapshotWithLocal(result.data)
+            : result.data || buildCloudSnapshot();
+          applySnapshotToBrowser(snapshot);
+          accountSessionRef.current = nextAccountSession;
+          setAccountSession(nextAccountSession);
+          writeAccountSession(nextAccountSession);
+          setAccountName(result.name);
+          setAccountPin("");
+          setAccountPromptOpen(false);
+          setAccountStatus("");
+          setCloudSyncStatus("Backup cloud aggiornato");
+
+          if (shouldMerge) {
+            await callAccountApi({
+              action: "save",
+              token: result.token,
+              data: snapshot,
+            });
+          }
+        };
+
+        const submitAccount = async () => {
+          if (accountBusy) return;
+          if (accountName.trim().length < 2) {
+            setAccountStatus("Inserisci un nome di almeno 2 caratteri");
+            return;
+          }
+          if (!/^\d{4}$/.test(accountPin)) {
+            setAccountStatus("Inserisci un PIN di 4 numeri");
+            return;
+          }
+
+          setAccountBusy(true);
+          setAccountStatus(accountMode === "create" ? "Creazione utente..." : "Accesso...");
+          try {
+            const result = await callAccountApi({
+              action: accountMode,
+              name: accountName.trim(),
+              pin: accountPin,
+              ...(accountMode === "create" ? { data: buildCloudSnapshot() } : {}),
+            });
+            await completeAccountAccess(result, accountMode === "login");
+          } catch (error) {
+            if (error.status === 409 && accountMode === "create") {
+              setAccountMode("login");
+            }
+            setAccountStatus(error.message);
+          } finally {
+            setAccountBusy(false);
+          }
+        };
+
+        const addPinDigit = (digit) => {
+          setAccountStatus("");
+          setAccountPin((current) => (current.length < 4 ? `${current}${digit}` : current));
+        };
+
+        const removePinDigit = () => {
+          setAccountStatus("");
+          setAccountPin((current) => current.slice(0, -1));
+        };
+
+        useEffect(() => {
+          accountSessionRef.current = accountSession;
+        }, [accountSession]);
+
+        useEffect(() => {
+          const rememberedAccount = initialAccountSessionRef.current;
+          if (!rememberedAccount?.token) return;
+          let cancelled = false;
+
+          callAccountApi({ action: "restore", token: rememberedAccount.token })
+            .then(async (result) => {
+              if (cancelled) return;
+              const snapshot = mergeCloudSnapshotWithLocal(result.data);
+              applySnapshotToBrowser(snapshot);
+              await callAccountApi({ action: "save", token: rememberedAccount.token, data: snapshot });
+              if (!cancelled) setCloudSyncStatus("Backup cloud aggiornato");
+            })
+            .catch((error) => {
+              if (cancelled) return;
+              console.error("Errore ripristino cloud", error);
+              if (error.status === 401) {
+                accountSessionRef.current = null;
+                setAccountSession(null);
+                writeAccountSession(null);
+                setAccountMode("login");
+                setAccountPromptOpen(true);
+                setAccountStatus("Accesso scaduto. I dati locali non sono stati modificati.");
+              } else {
+                setCloudSyncStatus("Cloud non raggiungibile: uso i dati salvati nel browser");
+              }
+            });
+
+          return () => {
+            cancelled = true;
+          };
+        }, []);
 
         useEffect(() => {
           if (!firebaseConfig) {
@@ -1488,8 +1725,17 @@
         const saveState = async (nextState) => {
           if (!user) return;
 
+          const completeState = {
+            session,
+            weeklyStats,
+            calendarShifts,
+            monthlyVoucherOverrides,
+            ...nextState,
+          };
+          writeLocalState(completeState);
+          queueCloudBackup(completeState, readLocalSettings());
+
           if (isLocalMode) {
-            writeLocalState({ session, weeklyStats, calendarShifts, monthlyVoucherOverrides, ...nextState });
             return;
           }
 
@@ -1878,23 +2124,44 @@
         };
 
         const saveSettings = () => {
-          writeLocalSettings({
+          const nextSettings = {
             googleCalendarIcsUrl: googleCalendarIcsUrl.trim(),
             paysForParking,
             paysUnionDues,
             darkTheme,
-          });
-          setSettingsStatus("Impostazioni salvate in questo browser");
+          };
+          writeLocalSettings(nextSettings);
+          queueCloudBackup(readLocalState(), nextSettings);
+          setSettingsStatus("Impostazioni salvate nel browser e nel backup cloud");
+        };
+
+        const syncCloudNow = async () => {
+          if (!accountSessionRef.current?.token) return;
+          setSettingsStatus("Sincronizzazione in corso...");
+          await queueCloudBackup(readLocalState(), readLocalSettings());
+          setSettingsStatus("Backup cloud aggiornato");
+        };
+
+        const logoutAccount = () => {
+          accountSessionRef.current = null;
+          setAccountSession(null);
+          writeAccountSession(null);
+          setAccountMode("login");
+          setAccountPin("");
+          setAccountStatus("I dati restano salvati in questo browser");
+          setAccountPromptOpen(true);
         };
 
         const clearGoogleCalendarIcsUrl = () => {
           setGoogleCalendarIcsUrl("");
-          writeLocalSettings({
+          const nextSettings = {
             googleCalendarIcsUrl: "",
             paysForParking,
             paysUnionDues,
             darkTheme,
-          });
+          };
+          writeLocalSettings(nextSettings);
+          queueCloudBackup(readLocalState(), nextSettings);
           setSettingsStatus("URL iCal rimosso da questo browser");
         };
 
@@ -1944,15 +2211,22 @@
 
         const applyImportedEventsToCalendar = async () => {
           if (!user || importedEventsPreview.length === 0) return;
-          const nextShifts = extractedEventsToCalendarShifts(importedEventsPreview);
+          const importedShifts = extractedEventsToCalendarShifts(importedEventsPreview);
+          const importedMonths = new Set(importedEventsPreview.map((event) => event.date.slice(0, 7)));
+          const preservedShifts = calendarShifts.filter(
+            (shift) =>
+              shift.source !== "local-extracted" ||
+              !importedMonths.has(String(shift.date || "").slice(0, 7)),
+          );
+          const nextShifts = mergeCalendarShiftCollections(preservedShifts, importedShifts);
           setCalendarShifts(nextShifts);
           await saveState({ calendarShifts: nextShifts });
-          if (nextShifts[0]) {
-            setCalendarMonth(nextShifts[0].date.slice(0, 7));
-            setCalendarDate(nextShifts[0].date);
+          if (importedShifts[0]) {
+            setCalendarMonth(importedShifts[0].date.slice(0, 7));
+            setCalendarDate(importedShifts[0].date);
           }
           setMode("calendar");
-          setImportStatus("Dati applicati al calendario locale");
+          setImportStatus("Mese aggiunto senza modificare gli altri mesi");
         };
 
         const exportImportedEventsToGoogleCsv = () => {
@@ -3097,6 +3371,125 @@
           >
             <div className={`fixed inset-0 pointer-events-none ${activeTheme.overlayClass}`}></div>
 
+            {accountPromptOpen && (
+              <div className="fixed inset-0 z-50 flex items-center justify-center overflow-y-auto bg-black/90 p-4">
+                <section className="my-auto w-full max-w-sm rounded border border-white/15 bg-zinc-950 p-5 shadow-2xl sm:p-7">
+                  <div className="mb-6 text-center">
+                    <p className="text-[10px] font-black uppercase tracking-widest themed-text">
+                      Backup personale
+                    </p>
+                    <h2 className="mt-2 text-3xl font-black">
+                      {accountMode === "create" ? "Crea utente" : "Accedi"}
+                    </h2>
+                    <p className="mt-2 text-xs leading-5 text-zinc-400">
+                      {accountMode === "create"
+                        ? "I dati gia presenti in questo browser verranno copiati nel tuo backup privato."
+                        : "I dati del backup verranno uniti a quelli presenti in questo browser."}
+                    </p>
+                  </div>
+
+                  <label className="block">
+                    <span className="mb-2 block text-[10px] font-black uppercase tracking-widest text-zinc-500">
+                      Nome
+                    </span>
+                    <input
+                      type="text"
+                      autoComplete="username"
+                      value={accountName}
+                      onChange={(event) => {
+                        setAccountName(event.target.value);
+                        setAccountStatus("");
+                      }}
+                      placeholder="Il tuo nome utente"
+                      className="w-full rounded border border-white/15 bg-black px-4 py-3 text-center text-base font-black text-white outline-none themed-focus"
+                    />
+                  </label>
+
+                  <div className="mt-5">
+                    <span className="mb-3 block text-center text-[10px] font-black uppercase tracking-widest text-zinc-500">
+                      PIN
+                    </span>
+                    <div className="mx-auto grid max-w-[220px] grid-cols-4 gap-2" aria-label={`${accountPin.length} numeri inseriti`}>
+                      {[0, 1, 2, 3].map((index) => (
+                        <div
+                          key={index}
+                          className={`flex h-11 items-center justify-center rounded border text-xl ${
+                            accountPin.length > index
+                              ? "themed-active"
+                              : "border-white/10 bg-white/[0.03] text-zinc-700"
+                          }`}
+                        >
+                          {accountPin.length > index ? "•" : ""}
+                        </div>
+                      ))}
+                    </div>
+
+                    <div className="mx-auto mt-4 grid max-w-[250px] grid-cols-3 gap-2">
+                      {[1, 2, 3, 4, 5, 6, 7, 8, 9].map((digit) => (
+                        <button
+                          key={digit}
+                          type="button"
+                          onClick={() => addPinDigit(String(digit))}
+                          className="h-12 rounded border border-white/10 bg-white/[0.04] text-lg font-black text-white transition hover:bg-white/[0.09]"
+                        >
+                          {digit}
+                        </button>
+                      ))}
+                      <div aria-hidden="true"></div>
+                      <button
+                        type="button"
+                        onClick={() => addPinDigit("0")}
+                        className="h-12 rounded border border-white/10 bg-white/[0.04] text-lg font-black text-white transition hover:bg-white/[0.09]"
+                      >
+                        0
+                      </button>
+                      <button
+                        type="button"
+                        onClick={removePinDigit}
+                        aria-label="Cancella ultima cifra"
+                        className="h-12 rounded border border-white/10 bg-white/[0.02] text-lg font-black text-zinc-400 transition hover:text-white"
+                      >
+                        ⌫
+                      </button>
+                    </div>
+                  </div>
+
+                  {accountStatus && (
+                    <p className="mt-4 text-center text-xs font-bold text-amber-200">{accountStatus}</p>
+                  )}
+
+                  <button
+                    type="button"
+                    onClick={submitAccount}
+                    disabled={accountBusy}
+                    className={`mt-5 w-full rounded px-4 py-4 text-xs font-black uppercase tracking-widest transition ${
+                      accountBusy ? "bg-zinc-800 text-zinc-500" : "themed-primary"
+                    }`}
+                  >
+                    {accountBusy
+                      ? "Attendi..."
+                      : accountMode === "create"
+                        ? "Crea utente e salva dati"
+                        : "Accedi"}
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setAccountMode((current) => (current === "create" ? "login" : "create"));
+                      setAccountPin("");
+                      setAccountStatus("");
+                    }}
+                    className="mt-3 w-full px-3 py-2 text-[10px] font-black uppercase tracking-widest text-zinc-400 hover:text-white"
+                  >
+                    {accountMode === "create" ? "Hai gia un utente? Accedi" : "Nuovo utente? Crealo"}
+                  </button>
+                  <p className="mt-4 text-center text-[10px] leading-4 text-zinc-600">
+                    Il PIN ha 4 cifre: scegli una combinazione non ovvia e non usarla per conti importanti.
+                  </p>
+                </section>
+              </div>
+            )}
+
             <main className="w-full max-w-4xl z-10">
               <header className="flex flex-col gap-4 sm:flex-row sm:justify-between sm:items-center mb-10">
                 <div>
@@ -3175,6 +3568,37 @@
                     <div className="mb-10 text-left space-y-4">
                       {mode === "settings" ? (
                         <div className="mx-auto max-w-2xl space-y-5 text-left">
+                          <div className="rounded border border-white/10 bg-white/[0.035] p-4">
+                            <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+                              <div>
+                                <span className="block text-[10px] font-black uppercase tracking-widest text-zinc-500">
+                                  Utente
+                                </span>
+                                <strong className="mt-1 block text-base text-white">
+                                  {accountSession?.name || "Non collegato"}
+                                </strong>
+                                <span className="mt-1 block text-[10px] font-bold text-zinc-500">
+                                  {cloudSyncStatus || "Dati locali e backup cloud attivi"}
+                                </span>
+                              </div>
+                              <div className="flex gap-2">
+                                <button
+                                  type="button"
+                                  onClick={syncCloudNow}
+                                  className="rounded border border-white/10 px-3 py-2 text-[9px] font-black uppercase tracking-widest text-zinc-300 hover:text-white"
+                                >
+                                  Sincronizza
+                                </button>
+                                <button
+                                  type="button"
+                                  onClick={logoutAccount}
+                                  className="rounded border border-red-400/15 px-3 py-2 text-[9px] font-black uppercase tracking-widest text-red-200/75 hover:text-red-100"
+                                >
+                                  Esci
+                                </button>
+                              </div>
+                            </div>
+                          </div>
                           <label className="block">
                             <span className="mb-2 block text-[10px] font-bold uppercase tracking-widest text-zinc-500">
                               URL pubblico iCal Google Calendar
