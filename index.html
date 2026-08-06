@@ -3834,12 +3834,14 @@
             const summary = shifts.reduce(
               (acc, shift) => {
                 const breakdown = calculateDailyShiftBreakdown(shift, shifts, 0, 0);
+                const nightHours = getTotalNightHours(breakdown);
                 acc.total += breakdown.total + breakdown.mealVoucher;
                 acc.displayHours += breakdown.elapsed / 3600000;
-                acc.hasNightShift = acc.hasNightShift || getTotalNightHours(breakdown) > 0;
+                acc.nightHours += nightHours;
+                acc.hasNightShift = acc.hasNightShift || nightHours > 0;
                 return acc;
               },
-              { total: 0, displayHours: 0, hasNightShift: false },
+              { total: 0, displayHours: 0, nightHours: 0, hasNightShift: false },
             );
 
             return {
@@ -3849,6 +3851,7 @@
               shifts,
               total: summary.total,
               displayHours: summary.displayHours,
+              nightHours: summary.nightHours,
               hasNightShift: summary.hasNightShift,
               isSick,
               isLeave,
@@ -5647,11 +5650,13 @@
                                                   {hasNightShift && (
                                                     <span
                                                       aria-hidden="true"
-                                                      className="inline-flex h-4 w-4 items-center justify-center rounded border border-violet-300/35 bg-violet-500/12 text-[10px] text-violet-200"
+                                                      className="inline-flex h-5 items-center justify-center gap-1 rounded border border-violet-300/35 bg-violet-500/12 px-1.5 text-[10px] font-black normal-case tracking-normal text-violet-200"
                                                     >
-                                                      ☾
+                                                      <span>☾</span>
+                                                      <span>{day.nightHours.toFixed(1)}h</span>
                                                     </span>
                                                   )}
+                                                  {hasNightShift && <span className="text-zinc-600">/</span>}
                                                   <span
                                                     className={`inline-flex items-center rounded border px-1.5 py-0.5 text-[10px] font-black normal-case tracking-normal ${getDurationChipClasses(
                                                       day.displayHours,
@@ -5771,11 +5776,13 @@
                                           {hasNightShift && (
                                             <span
                                               aria-hidden="true"
-                                              className="inline-flex h-4 w-4 items-center justify-center rounded border border-violet-300/35 bg-violet-500/12 text-[10px] text-violet-200"
+                                              className="inline-flex h-5 items-center justify-center gap-1 rounded border border-violet-300/35 bg-violet-500/12 px-1.5 text-[9px] font-black tracking-normal text-violet-200"
                                             >
-                                              ☾
+                                              <span>☾</span>
+                                              <span>{day.nightHours.toFixed(1)}h</span>
                                             </span>
                                           )}
+                                          {hasNightShift && <span className="text-[9px] text-zinc-600">/</span>}
                                           <span
                                             className={`inline-flex items-center rounded border px-1.5 py-0.5 text-[9px] font-black tracking-normal ${getDurationChipClasses(
                                               day.displayHours,
