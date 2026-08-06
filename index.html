@@ -560,20 +560,44 @@
       .modern-ui .prediction-layout label,
       .modern-ui .prediction-layout input,
       .modern-ui .prediction-layout select {
+        width: 100%;
+        inline-size: 100%;
         min-width: 0;
+        min-inline-size: 0;
         max-width: 100%;
+        max-inline-size: 100%;
         box-sizing: border-box;
       }
 
       .modern-ui .prediction-layout input[type="date"] {
         display: block;
-        width: 100%;
+        width: -webkit-fill-available;
+        inline-size: -webkit-fill-available;
+        -webkit-appearance: none;
+        appearance: none;
         -webkit-min-logical-width: 0;
       }
 
-      .modern-ui .prediction-layout input[type="date"]::-webkit-date-and-time-value {
+      .modern-ui .prediction-layout input[type="date"]::-webkit-datetime-edit {
+        display: block;
+        width: 100%;
         min-width: 0;
+        padding: 0;
+      }
+
+      .modern-ui .prediction-layout input[type="date"]::-webkit-date-and-time-value {
+        width: 100%;
+        min-width: 0;
+        margin: 0;
         text-align: left;
+      }
+
+      .modern-ui .prediction-time-grid {
+        display: grid;
+        width: 100%;
+        min-width: 0;
+        grid-template-columns: minmax(0, 1fr);
+        gap: 16px;
       }
 
       .modern-ui .prediction-result {
@@ -591,6 +615,12 @@
       .modern-ui .prediction-result > div:first-of-type {
         font-size: 48px;
         line-height: 1;
+      }
+
+      @media (min-width: 640px) {
+        .modern-ui .prediction-time-grid {
+          grid-template-columns: repeat(2, minmax(0, 1fr));
+        }
       }
 
       @media (min-width: 900px) {
@@ -5289,7 +5319,7 @@
                               className="w-full bg-black/40 border border-white/10 rounded px-3 py-3 text-sm font-bold text-white"
                             />
                           </label>
-                          <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                          <div className="prediction-time-grid">
                             <label className="block">
                               <span className="block text-[10px] font-bold text-zinc-500 uppercase tracking-widest mb-2">
                                 Inizio
