@@ -1952,6 +1952,7 @@
         `EUR ${amount.toLocaleString("it-IT", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
       const getTotalNightHours = (breakdownLike) =>
         (breakdownLike.nightWeekdayHours || 0) + (breakdownLike.nightSundayHolidayHours || 0);
+      const APP_MODES = new Set(["calendar", "import", "track", "predict", "settings"]);
 
       function App() {
         const [user, setUser] = useState(null);
@@ -2007,6 +2008,9 @@
         const previousSelectedCalendarDateRef = useRef("");
         const previousSelectedCalendarShiftRef = useRef("");
         const calendarLongPressTimerRef = useRef(null);
+        const modeRef = useRef("calendar");
+        const previousModeRef = useRef("calendar");
+        const previewCalendarDateRef = useRef("");
         const initialAccountSessionRef = useRef(readAccountSession());
         const accountSessionRef = useRef(initialAccountSessionRef.current);
         const cloudSaveChainRef = useRef(Promise.resolve());
@@ -2031,6 +2035,43 @@
           () => getCcnlPayRates(calculationCcnlLevel),
           [calculationCcnlLevel],
         );
+
+        const navigateToMode = (nextMode, options = {}) => {
+          if (!APP_MODES.has(nextMode)) return;
+          const currentMode = modeRef.current;
+          if (currentMode === nextMode && !previewCalendarDateRef.current) return;
+          if (currentMode !== "settings") {
+            previousModeRef.current = currentMode;
+          }
+
+          const nextState = {
+            ...(window.history.state || {}),
+            earningsTrackerMode: nextMode,
+            earningsTrackerPreviewDate: "",
+          };
+          window.history[options.replace ? "replaceState" : "pushState"](nextState, "");
+          modeRef.current = nextMode;
+          previewCalendarDateRef.current = "";
+          setPreviewCalendarDate("");
+          setMode(nextMode);
+        };
+
+        const goBackFromSettings = () => {
+          if (window.history.state?.earningsTrackerMode === "settings") {
+            window.history.back();
+            return;
+          }
+          navigateToMode(previousModeRef.current || "calendar", { replace: true });
+        };
+
+        const closeCalendarDayPreview = () => {
+          if (window.history.state?.earningsTrackerPreviewDate) {
+            window.history.back();
+            return;
+          }
+          previewCalendarDateRef.current = "";
+          setPreviewCalendarDate("");
+        };
 
         const applySnapshotToBrowser = (snapshot) => {
           const appState = snapshot?.appState || readLocalState();
@@ -2322,6 +2363,44 @@
         useEffect(() => {
           const timer = setInterval(() => setCurrentTime(new Date()), 1000);
           return () => clearInterval(timer);
+        }, []);
+
+        useEffect(() => {
+          const currentState = window.history.state || {};
+          const initialMode = APP_MODES.has(currentState.earningsTrackerMode)
+            ? currentState.earningsTrackerMode
+            : "calendar";
+          const initialPreviewDate = currentState.earningsTrackerPreviewDate || "";
+
+          modeRef.current = initialMode;
+          previewCalendarDateRef.current = initialPreviewDate;
+          setMode(initialMode);
+          setPreviewCalendarDate(initialPreviewDate);
+          window.history.replaceState(
+            {
+              ...currentState,
+              earningsTrackerMode: initialMode,
+              earningsTrackerPreviewDate: initialPreviewDate,
+            },
+            "",
+          );
+
+          const handlePopState = (event) => {
+            const nextMode = APP_MODES.has(event.state?.earningsTrackerMode)
+              ? event.state.earningsTrackerMode
+              : "calendar";
+            const nextPreviewDate = event.state?.earningsTrackerPreviewDate || "";
+            if (modeRef.current !== "settings" && modeRef.current !== nextMode) {
+              previousModeRef.current = modeRef.current;
+            }
+            modeRef.current = nextMode;
+            previewCalendarDateRef.current = nextPreviewDate;
+            setMode(nextMode);
+            setPreviewCalendarDate(nextPreviewDate);
+          };
+
+          window.addEventListener("popstate", handlePopState);
+          return () => window.removeEventListener("popstate", handlePopState);
         }, []);
 
         useEffect(() => {
@@ -3079,7 +3158,7 @@
             const textWithFileName = `Nome file: ${file.name}\n${extractedText}`;
             setImportText(textWithFileName);
             parseImportPreview(textWithFileName);
-            setMode("import");
+            navigateToMode("import");
           } catch (error) {
             console.error("Errore import PDF", error);
             setImportStatus("Import PDF non riuscito");
@@ -3109,7 +3188,7 @@
             setCalendarMonth(importedShifts[0].date.slice(0, 7));
             setCalendarDate(importedShifts[0].date);
           }
-          setMode("calendar");
+          navigateToMode("calendar");
           setImportStatus("Mese aggiunto senza modificare gli altri mesi");
         };
 
@@ -3493,6 +3572,15 @@
         const openCalendarDayPreview = (dateValue) => {
           clearCalendarLongPress();
           selectCalendarDay(dateValue);
+          window.history.pushState(
+            {
+              ...(window.history.state || {}),
+              earningsTrackerMode: modeRef.current,
+              earningsTrackerPreviewDate: dateValue,
+            },
+            "",
+          );
+          previewCalendarDateRef.current = dateValue;
           setPreviewCalendarDate(dateValue);
         };
 
@@ -4081,7 +4169,7 @@
               <button
                 key={item.key}
                 type="button"
-                onClick={() => setMode(item.key)}
+                onClick={() => navigateToMode(item.key)}
                 aria-current={mode === item.key ? "page" : undefined}
                 className={`nav-item rounded px-4 py-3 text-xs font-black uppercase tracking-widest transition ${
                   mode === item.key ? "themed-primary" : "text-zinc-400 hover:text-white"
@@ -4480,19 +4568,27 @@
                 <div className="flex shrink-0 items-center gap-2">
                   <button
                     onClick={() => {
-                      setMode("settings");
+                      if (mode === "settings") {
+                        goBackFromSettings();
+                        return;
+                      }
+                      navigateToMode("settings");
                       setSettingsStatus("");
                     }}
-                    aria-label="Apri impostazioni"
-                    className={`flex min-h-10 items-center rounded border px-3 py-2 text-[11px] font-bold transition ${
-                      mode === "settings" ? "themed-active" : "border-white/10 text-zinc-300 hover:text-white"
-                    }`}
+                    aria-label={mode === "settings" ? "Torna indietro" : "Apri impostazioni"}
+                    className="flex min-h-10 items-center rounded border border-white/10 px-3 py-2 text-[11px] font-bold text-zinc-300 transition hover:text-white"
                   >
-                    <span className="hidden sm:inline">Impostazioni</span>
-                    <svg className="sm:hidden" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" aria-hidden="true">
-                      <circle cx="12" cy="12" r="3" />
-                      <path d="M19.4 15a1.7 1.7 0 0 0 .34 1.88l.06.06-2.83 2.83-.06-.06a1.7 1.7 0 0 0-1.88-.34 1.7 1.7 0 0 0-1.03 1.56V21h-4v-.08A1.7 1.7 0 0 0 9 19.36a1.7 1.7 0 0 0-1.88.34l-.06.06-2.83-2.83.06-.06A1.7 1.7 0 0 0 4.63 15a1.7 1.7 0 0 0-1.55-1.03H3v-4h.08A1.7 1.7 0 0 0 4.64 9a1.7 1.7 0 0 0-.34-1.88l-.06-.06 2.83-2.83.06.06A1.7 1.7 0 0 0 9 4.63a1.7 1.7 0 0 0 1.03-1.55V3h4v.08A1.7 1.7 0 0 0 15 4.64a1.7 1.7 0 0 0 1.88-.34l.06-.06 2.83 2.83-.06.06A1.7 1.7 0 0 0 19.37 9a1.7 1.7 0 0 0 1.55 1.03H21v4h-.08A1.7 1.7 0 0 0 19.4 15Z" />
-                    </svg>
+                    <span className="hidden sm:inline">{mode === "settings" ? "Indietro" : "Impostazioni"}</span>
+                    {mode === "settings" ? (
+                      <svg className="sm:hidden" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" aria-hidden="true">
+                        <path d="m15 18-6-6 6-6" />
+                      </svg>
+                    ) : (
+                      <svg className="sm:hidden" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" aria-hidden="true">
+                        <circle cx="12" cy="12" r="3" />
+                        <path d="M19.4 15a1.7 1.7 0 0 0 .34 1.88l.06.06-2.83 2.83-.06-.06a1.7 1.7 0 0 0-1.88-.34 1.7 1.7 0 0 0-1.03 1.56V21h-4v-.08A1.7 1.7 0 0 0 9 19.36a1.7 1.7 0 0 0-1.88.34l-.06.06-2.83-2.83.06-.06A1.7 1.7 0 0 0 4.63 15a1.7 1.7 0 0 0-1.55-1.03H3v-4h.08A1.7 1.7 0 0 0 4.64 9a1.7 1.7 0 0 0-.34-1.88l-.06-.06 2.83-2.83.06.06A1.7 1.7 0 0 0 9 4.63a1.7 1.7 0 0 0 1.03-1.55V3h4v.08A1.7 1.7 0 0 0 15 4.64a1.7 1.7 0 0 0 1.88-.34l.06-.06 2.83 2.83-.06.06A1.7 1.7 0 0 0 19.37 9a1.7 1.7 0 0 0 1.55 1.03H21v4h-.08A1.7 1.7 0 0 0 19.4 15Z" />
+                      </svg>
+                    )}
                   </button>
                 </div>
               </header>
@@ -6192,7 +6288,7 @@
                       </div>
                       <button
                         type="button"
-                        onClick={() => setPreviewCalendarDate("")}
+                        onClick={closeCalendarDayPreview}
                         className="rounded border border-white/10 px-3 py-2 text-[10px] font-black uppercase tracking-widest text-zinc-300 hover:text-white"
                       >
                         Chiudi
