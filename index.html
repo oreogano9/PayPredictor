@@ -512,14 +512,16 @@
         background: rgba(255, 255, 255, 0.025);
       }
 
-      .modern-ui .calendar-view-toggle {
+      .modern-ui .calendar-view-toggle,
+      .modern-ui .calendar-range-toggle {
         align-self: end;
         padding: 3px;
         border-radius: 7px;
         background: rgba(118, 118, 128, 0.18);
       }
 
-      .modern-ui .calendar-view-toggle button {
+      .modern-ui .calendar-view-toggle button,
+      .modern-ui .calendar-range-toggle button {
         min-height: 44px;
         border: 0;
       }
@@ -2008,6 +2010,7 @@
         const [calendarMonth, setCalendarMonth] = useState(() => formatMonthInput(new Date()));
         const [calendarDate, setCalendarDate] = useState(() => formatDateInput(new Date()));
         const [calendarView, setCalendarView] = useState("plan");
+        const [calendarRange, setCalendarRange] = useState("month");
         const [calendarGraphMode, setCalendarGraphMode] = useState("both");
         const [calendarPayLineMode, setCalendarPayLineMode] = useState("daily");
         const [hoveredGraphPointKey, setHoveredGraphPointKey] = useState(null);
@@ -3484,6 +3487,12 @@
           }
         };
 
+        const openCalendarMonthFromYear = (monthValue) => {
+          updateCalendarMonth(monthValue.slice(0, 4), Number(monthValue.slice(5, 7)));
+          setCalendarRange("month");
+          setCalendarView("plan");
+        };
+
         const selectCalendarDay = (dateValue) => {
           setCalendarDate(dateValue);
           setCalendarMonth(dateValue.slice(0, 7));
@@ -3861,34 +3870,29 @@
             setExpandedCalendarShiftId(firstShiftId || null);
           }
         }, [selectedCalendarDay]);
-        const monthlyPaidAbsenceHours = useMemo(
-          () =>
-            monthlyShifts
-              .filter(isAbsenceShift)
-              .reduce((sum, shift) => {
-                const { start, end } = getShiftRange(shift.date, shift.startTime, shift.endTime);
-                return sum + (end.getTime() - start.getTime()) / 3600000;
-              }, 0),
-          [monthlyShifts],
-        );
-        const monthlyOrdinaryWorkThreshold = Math.max(
-          0,
-          MONTHLY_ORDINARY_HOURS - monthlyPaidAbsenceHours,
-        );
-        const holidayRestDates = useMemo(
-          () =>
-            calendarDays
-              .filter(
-                (day) =>
-                  day.inMonth &&
-                  day.date.getDay() !== 0 &&
-                  Boolean(getHoliday(day.date)) &&
-                  day.shifts.length === 0,
-              )
-              .map((day) => day.dateValue),
-          [calendarDays],
-        );
-        const monthlyPrediction = useMemo(() => {
+        const calculateMonthlyPrediction = (monthValue, monthShifts) => {
+          const monthlyPaidAbsenceHours = monthShifts
+            .filter(isAbsenceShift)
+            .reduce((sum, shift) => {
+              const { start, end } = getShiftRange(shift.date, shift.startTime, shift.endTime);
+              return sum + (end.getTime() - start.getTime()) / 3600000;
+            }, 0);
+          const monthlyOrdinaryWorkThreshold = Math.max(
+            0,
+            MONTHLY_ORDINARY_HOURS - monthlyPaidAbsenceHours,
+          );
+          const [year, month] = monthValue.split("-").map(Number);
+          const datesWithShifts = new Set(monthShifts.map((shift) => shift.date));
+          const holidayRestDates = [];
+          const daysInMonth = new Date(year, month, 0).getDate();
+          for (let day = 1; day <= daysInMonth; day += 1) {
+            const date = new Date(year, month - 1, day);
+            const dateValue = formatDateInput(date);
+            if (date.getDay() !== 0 && getHoliday(date) && !datesWithShifts.has(dateValue)) {
+              holidayRestDates.push(dateValue);
+            }
+          }
+
           const weeklyHoursByKey = {};
           const payCodeTotals = { ORD: 0, S15: 0, S25: 0, S45: 0, S50: 0 };
           let total = 0;
@@ -3906,15 +3910,15 @@
           let foodVouchers = 0;
           let leaveHours = 0;
           let sickHours = 0;
-          const workedDays = new Set(monthlyShifts.filter((shift) => !isAbsenceShift(shift)).map((shift) => shift.date)).size;
-          const leaveDays = new Set(monthlyShifts.filter(isLeaveShift).map((shift) => shift.date)).size;
-          const sickDays = new Set(monthlyShifts.filter(isSickShift).map((shift) => shift.date)).size;
+          const workedDays = new Set(monthShifts.filter((shift) => !isAbsenceShift(shift)).map((shift) => shift.date)).size;
+          const leaveDays = new Set(monthShifts.filter(isLeaveShift).map((shift) => shift.date)).size;
+          const sickDays = new Set(monthShifts.filter(isSickShift).map((shift) => shift.date)).size;
 
-          for (const shift of monthlyShifts) {
+          for (const shift of monthShifts) {
             const weekKey = getWeekKey(shift.date);
             const breakdown = calculateDailyShiftBreakdown(
               shift,
-              monthlyShifts.filter((candidate) => candidate.date === shift.date),
+              monthShifts.filter((candidate) => candidate.date === shift.date),
               monthlyWorkedHoursBefore,
               weeklyHoursByKey[weekKey] || 0,
               monthlyOrdinaryWorkThreshold,
@@ -3942,9 +3946,9 @@
             }
           }
 
-          const effectiveHolidayRestDates = monthlyShifts.length > 0 ? holidayRestDates : [];
+          const effectiveHolidayRestDates = monthShifts.length > 0 ? holidayRestDates : [];
           const earningsTotal = total;
-          const parkingDeduction = monthlyShifts.length > 0 && paysForParking ? MONTHLY_PARKING_DEDUCTION : 0;
+          const parkingDeduction = monthShifts.length > 0 && paysForParking ? MONTHLY_PARKING_DEDUCTION : 0;
           const incomeAfterParking = Math.max(0, earningsTotal - parkingDeduction);
           const payslipNetEstimate = calculatePayslipNetEstimate({
             payCodeTotals,
@@ -3982,14 +3986,60 @@
             ordinaryWorkThreshold: monthlyOrdinaryWorkThreshold,
             payCodeTotals,
           };
-        }, [
-          holidayRestDates,
-          monthlyOrdinaryWorkThreshold,
+        };
+        const monthlyPrediction = useMemo(
+          () => calculateMonthlyPrediction(calendarMonth, monthlyShifts),
+          [
+          calendarMonth,
           monthlyShifts,
           payRates,
           paysForParking,
           paysUnionDues,
-        ]);
+          ],
+        );
+        const selectedCalendarYear = Number(calendarMonth.slice(0, 4));
+        const yearlyMonthSummaries = useMemo(
+          () =>
+            MONTH_OPTIONS.map((label, index) => {
+              const monthValue = `${selectedCalendarYear}-${String(index + 1).padStart(2, "0")}`;
+              const shifts = effectiveCalendarShifts
+                .filter((shift) => shift.date.startsWith(monthValue))
+                .sort((a, b) => `${a.date} ${a.startTime}`.localeCompare(`${b.date} ${b.startTime}`));
+              return {
+                label,
+                monthValue,
+                shiftCount: shifts.length,
+                prediction: calculateMonthlyPrediction(monthValue, shifts),
+              };
+            }),
+          [effectiveCalendarShifts, payRates, paysForParking, paysUnionDues, selectedCalendarYear],
+        );
+        const yearlyPrediction = useMemo(
+          () =>
+            yearlyMonthSummaries.reduce(
+              (summary, month) => {
+                summary.total += month.prediction.total;
+                summary.net += month.prediction.payslipNetEstimate.net;
+                summary.foodVouchers += month.prediction.foodVouchers;
+                summary.paidElapsed += month.prediction.paidElapsed;
+                summary.nightHours += getTotalNightHours(month.prediction);
+                summary.shiftCount += month.shiftCount;
+                if (month.shiftCount > 0) summary.activeMonths += 1;
+                return summary;
+              },
+              {
+                total: 0,
+                net: 0,
+                foodVouchers: 0,
+                paidElapsed: 0,
+                nightHours: 0,
+                shiftCount: 0,
+                activeMonths: 0,
+              },
+            ),
+          [yearlyMonthSummaries],
+        );
+        const monthlyOrdinaryWorkThreshold = monthlyPrediction.ordinaryWorkThreshold;
         const monthlyShiftBreakdowns = useMemo(() => {
           const weeklyHoursByKey = {};
           let monthlyWorkedHoursBefore = 0;
@@ -5316,12 +5366,15 @@
                         </div>
                       ) : (
                         <div className="calendar-workspace space-y-4">
-                          <section className="modern-month-hero" aria-label={`Riepilogo ${currentCalendarMonthLabel}`}>
+                          <section
+                            className="modern-month-hero"
+                            aria-label={`Riepilogo ${calendarRange === "year" ? selectedCalendarYear : currentCalendarMonthLabel}`}
+                          >
                               <div className="modern-month-hero-copy">
                                 <div className="flex items-start justify-between gap-3">
                                   <div>
-                                    <p>Disponibile questo mese</p>
-                                    <h2>{currentCalendarMonthLabel}</h2>
+                                    <p>{calendarRange === "year" ? "Disponibile quest'anno" : "Disponibile questo mese"}</p>
+                                    <h2>{calendarRange === "year" ? selectedCalendarYear : currentCalendarMonthLabel}</h2>
                                   </div>
                                   <div
                                     className="inline-flex shrink-0 items-center gap-0.5 rounded border border-white/[0.08] bg-black/15 p-0.5"
@@ -5349,7 +5402,7 @@
                                   </div>
                                 </div>
                                 <div className="modern-month-total">
-                                  EUR {monthlyPrediction.total.toLocaleString("it-IT", {
+                                  EUR {(calendarRange === "year" ? yearlyPrediction.total : monthlyPrediction.total).toLocaleString("it-IT", {
                                     minimumFractionDigits: 2,
                                     maximumFractionDigits: 2,
                                   })}
@@ -5358,47 +5411,76 @@
                               <div className="modern-month-stats">
                                 <div className="summary-payroll">
                                   <span>In busta</span>
-                                  <strong>EUR {monthlyPrediction.payslipNetEstimate.net.toFixed(2)}</strong>
+                                  <strong>EUR {(calendarRange === "year" ? yearlyPrediction.net : monthlyPrediction.payslipNetEstimate.net).toFixed(2)}</strong>
                                 </div>
                                 <div className="summary-voucher">
-                                  <span>Buoni</span>
-                                  <strong>EUR {monthlyPrediction.foodVouchers.toFixed(2)}</strong>
+                                  <span>Buoni <span className="text-[0.78em]" aria-hidden="true">🍽️</span></span>
+                                  <strong>EUR {(calendarRange === "year" ? yearlyPrediction.foodVouchers : monthlyPrediction.foodVouchers).toFixed(2)}</strong>
                                 </div>
                                 <div className="summary-after">
                                   <span>Ore pagate</span>
-                                  <strong>{(monthlyPrediction.paidElapsed / 3600000).toFixed(1)}h</strong>
+                                  <strong>{((calendarRange === "year" ? yearlyPrediction.paidElapsed : monthlyPrediction.paidElapsed) / 3600000).toFixed(1)}h</strong>
                                 </div>
                                 <div className="summary-night">
                                   <span>Ore notte</span>
-                                  <strong>{getTotalNightHours(monthlyPrediction).toFixed(1)}h</strong>
+                                  <strong>{(calendarRange === "year" ? yearlyPrediction.nightHours : getTotalNightHours(monthlyPrediction)).toFixed(1)}h</strong>
                                 </div>
                               </div>
                           </section>
                           <div className="calendar-controls">
-                          <div className="calendar-view-toggle grid grid-cols-2 gap-2">
-                            <button
-                              onClick={() => setCalendarView("plan")}
-                              className={`rounded border px-3 py-3 text-[10px] font-black uppercase tracking-widest transition ${
-                                calendarView === "plan"
-                                  ? "themed-active"
-                                  : "border-white/10 text-zinc-300 hover:text-white"
-                              }`}
-                            >
-                              Calendario
-                            </button>
-                            <button
-                              onClick={() => setCalendarView("graph")}
-                              className={`rounded border px-3 py-3 text-[10px] font-black uppercase tracking-widest transition ${
-                                calendarView === "graph"
-                                  ? "themed-active"
-                                  : "border-white/10 text-zinc-300 hover:text-white"
-                              }`}
-                            >
-                              Grafico
-                            </button>
+                          <div className="space-y-2">
+                            <div className="calendar-view-toggle grid grid-cols-2 gap-2">
+                              <button
+                                onClick={() => setCalendarView("plan")}
+                                className={`rounded border px-3 py-3 text-[10px] font-black uppercase tracking-widest transition ${
+                                  calendarView === "plan"
+                                    ? "themed-active"
+                                    : "border-white/10 text-zinc-300 hover:text-white"
+                                }`}
+                              >
+                                Calendario
+                              </button>
+                              <button
+                                onClick={() => {
+                                  setCalendarRange("month");
+                                  setCalendarView("graph");
+                                }}
+                                className={`rounded border px-3 py-3 text-[10px] font-black uppercase tracking-widest transition ${
+                                  calendarView === "graph"
+                                    ? "themed-active"
+                                    : "border-white/10 text-zinc-300 hover:text-white"
+                                }`}
+                              >
+                                Grafico
+                              </button>
+                            </div>
+                            <div className="calendar-range-toggle grid grid-cols-2 gap-2">
+                              {[
+                                ["month", "Mese"],
+                                ["year", "Anno"],
+                              ].map(([range, label]) => (
+                                <button
+                                  key={range}
+                                  type="button"
+                                  aria-pressed={calendarRange === range}
+                                  onClick={() => {
+                                    setCalendarRange(range);
+                                    setCalendarView("plan");
+                                  }}
+                                  className={`rounded border px-3 py-2 text-[10px] font-black transition ${
+                                    calendarRange === range && calendarView === "plan"
+                                      ? "themed-active"
+                                      : "border-white/10 text-zinc-400 hover:text-white"
+                                  }`}
+                                >
+                                  {label}
+                                </button>
+                              ))}
+                            </div>
                           </div>
-                          <div className="calendar-period-controls grid grid-cols-1 sm:grid-cols-2 gap-4">
-                            <label className="block">
+                          <div className={`calendar-period-controls grid grid-cols-1 gap-4 ${calendarRange === "month" ? "sm:grid-cols-2" : ""}`}>
+                            {calendarRange === "month" && (
+                              <label className="block">
                               <span className="block text-[10px] font-bold text-zinc-500 uppercase tracking-widest mb-2">
                                 Mese
                               </span>
@@ -5415,7 +5497,8 @@
                                   </option>
                                 ))}
                               </select>
-                            </label>
+                              </label>
+                            )}
                             <label className="block">
                               <span className="block text-[10px] font-bold text-zinc-500 uppercase tracking-widest mb-2">
                                 Anno
@@ -5437,6 +5520,67 @@
                           </div>
                           </div>
                           {calendarView === "plan" ? (
+                            calendarRange === "year" ? (
+                              <div className="year-calendar-grid grid grid-cols-1 gap-2 sm:grid-cols-2 lg:grid-cols-3">
+                                {yearlyMonthSummaries.map((month) => {
+                                  const prediction = month.prediction;
+                                  const hasData = month.shiftCount > 0;
+                                  const isCurrentMonth = month.monthValue === calendarMonth;
+                                  return (
+                                    <button
+                                      key={month.monthValue}
+                                      type="button"
+                                      onClick={() => openCalendarMonthFromYear(month.monthValue)}
+                                      aria-label={`Apri ${month.label} ${selectedCalendarYear}`}
+                                      className={`surface-panel rounded border p-4 text-left transition hover:border-white/20 ${
+                                        isCurrentMonth
+                                          ? "themed-active"
+                                          : "border-white/10 bg-white/[0.035]"
+                                      }`}
+                                    >
+                                      <div className="flex items-start justify-between gap-3">
+                                        <div>
+                                          <div className="text-lg font-black text-white">{month.label}</div>
+                                          <div className="mt-1 text-[10px] font-bold text-zinc-500">
+                                            {hasData
+                                              ? `${month.shiftCount} ${month.shiftCount === 1 ? "turno" : "turni"}`
+                                              : "Nessun turno"}
+                                          </div>
+                                        </div>
+                                        <div className={`text-right text-lg font-black ${hasData ? "themed-text" : "text-zinc-600"}`}>
+                                          {hasData
+                                            ? prediction.total.toLocaleString("it-IT", {
+                                                style: "currency",
+                                                currency: "EUR",
+                                              })
+                                            : "—"}
+                                        </div>
+                                      </div>
+                                      <div className="mt-4 grid grid-cols-3 gap-2 border-t border-white/[0.07] pt-3">
+                                        <div>
+                                          <div className="text-[9px] font-bold text-zinc-500">Ore</div>
+                                          <div className="mt-1 text-sm font-black text-zinc-200">
+                                            {(prediction.paidElapsed / 3600000).toFixed(1)}h
+                                          </div>
+                                        </div>
+                                        <div className="summary-night">
+                                          <div className="text-[9px] font-bold text-zinc-500">Notte</div>
+                                          <div className="summary-value mt-1 text-sm font-black">
+                                            {getTotalNightHours(prediction).toFixed(1)}h
+                                          </div>
+                                        </div>
+                                        <div className="summary-voucher">
+                                          <div className="text-[9px] font-bold text-zinc-500">Buoni</div>
+                                          <div className="summary-value mt-1 text-sm font-black">
+                                            EUR {prediction.foodVouchers.toFixed(0)}
+                                          </div>
+                                        </div>
+                                      </div>
+                                    </button>
+                                  );
+                                })}
+                              </div>
+                            ) : (
                             <>
                           <div className="calendar-shell surface-panel bg-black/30 border border-white/10 rounded p-3">
                             <div className="sm:hidden space-y-2">
@@ -5900,6 +6044,7 @@
                             </div>
                           </details>
                             </>
+                            )
                           ) : (
                             <div className="surface-panel bg-black/30 border border-white/10 rounded p-4">
                               <div className="flex flex-wrap items-start justify-between gap-3 mb-4">
