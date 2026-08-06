@@ -876,6 +876,7 @@
       const MONTHLY_ORDINARY_HOURS = 130;
       const MONTHLY_PARKING_DEDUCTION = 46.0;
       const PAYSLIP_MONTHLY_BASE = 920.77;
+      const MIN_ICAL_WORK_EVENT_DURATION = 5 * 3600000;
       const PAYSLIP_S15_RATE = 7.18664;
       const PAYSLIP_S50_RATE = 9.37387;
       const PAYSLIP_S25_RATE = 7.81156;
@@ -1889,7 +1890,8 @@
             !start ||
             !end ||
             end <= start ||
-            isMidnightToMidnightCalendarBlock(start, end)
+            isMidnightToMidnightCalendarBlock(start, end) ||
+            end.getTime() - start.getTime() < MIN_ICAL_WORK_EVENT_DURATION
           ) {
             return;
           }
@@ -4145,7 +4147,7 @@
           });
           const report = {
             report: "PayPredictor calendar debug",
-            formatVersion: 1,
+            formatVersion: 2,
             generatedAt: new Date().toISOString(),
             environment: {
               timezone: Intl.DateTimeFormat().resolvedOptions().timeZone || null,
@@ -4161,6 +4163,7 @@
               paysUnionDues,
               darkTheme,
               hasIcalUrl: Boolean(googleCalendarIcsUrl.trim()),
+              minimumIcalWorkEventHours: MIN_ICAL_WORK_EVENT_DURATION / 3600000,
               icalSyncStatus: icalSyncStatus || null,
               selectedCalendarMonth: calendarMonth,
               voucherOverrides: monthlyVoucherOverrides,
