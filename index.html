@@ -4164,8 +4164,49 @@
 
           return { points, maxHours, maxPay, maxCumulativePay };
         }, [calendarDays, monthlyShiftBreakdowns]);
+        const yearlyGraphData = useMemo(() => {
+          let runningPay = 0;
+          const points = yearlyMonthSummaries.map((month) => {
+            const prediction = month.prediction;
+            const pay = prediction.total;
+            runningPay += pay;
+            return {
+              key: month.monthValue,
+              label: month.label.slice(0, 3),
+              title: `${month.label} ${selectedCalendarYear}`,
+              hours: prediction.paidElapsed / 3600000,
+              pay,
+              cumulativePay: runningPay,
+              hasNightShift: getTotalNightHours(prediction) > 0,
+              nightHours: getTotalNightHours(prediction),
+              mealVoucher: prediction.foodVouchers,
+              unpaidBreakMinutes: prediction.unpaidBreakMs / 60000,
+              payCodeTotals: prediction.payCodeTotals,
+              shiftCount: month.shiftCount,
+            };
+          });
+          const maxHours = points.reduce((max, point) => Math.max(max, point.hours), 0);
+          const maxPay = points.reduce((max, point) => Math.max(max, point.pay), 0);
+          const maxCumulativePay = points.reduce((max, point) => Math.max(max, point.cumulativePay), 0);
+          return { points, maxHours, maxPay, maxCumulativePay };
+        }, [selectedCalendarYear, yearlyMonthSummaries]);
+        const activeGraphData = calendarRange === "year" ? yearlyGraphData : monthlyGraphData;
+        const populatedGraphPoints =
+          calendarRange === "year"
+            ? activeGraphData.points.filter((point) => point.shiftCount > 0)
+            : activeGraphData.points;
+        const fallbackGraphPoint =
+          populatedGraphPoints[populatedGraphPoints.length - 1] ||
+          activeGraphData.points[activeGraphData.points.length - 1] ||
+          null;
         const hoveredGraphPoint =
-          monthlyGraphData.points.find((point) => point.key === hoveredGraphPointKey) || monthlyGraphData.points[monthlyGraphData.points.length - 1] || null;
+          activeGraphData.points.find((point) => point.key === hoveredGraphPointKey) || fallbackGraphPoint;
+        const selectCalendarGraphPoint = (point) => {
+          setHoveredGraphPointKey(point.key);
+          if (calendarRange === "month") {
+            selectCalendarDay(point.key);
+          }
+        };
         const currentCalendarMonthLabel = `${MONTH_OPTIONS[Number(calendarMonth.slice(5, 7)) - 1]} ${calendarMonth.slice(0, 4)}`;
         const maxCalendarDayTotal = useMemo(
           () =>
@@ -5474,10 +5515,7 @@
                                 Calendario
                               </button>
                               <button
-                                onClick={() => {
-                                  setCalendarRange("month");
-                                  setCalendarView("graph");
-                                }}
+                                onClick={() => setCalendarView("graph")}
                                 className={`rounded border px-3 py-3 text-[10px] font-black uppercase tracking-widest transition ${
                                   calendarView === "graph"
                                     ? "themed-active"
@@ -5496,12 +5534,9 @@
                                   key={range}
                                   type="button"
                                   aria-pressed={calendarRange === range}
-                                  onClick={() => {
-                                    setCalendarRange(range);
-                                    setCalendarView("plan");
-                                  }}
+                                  onClick={() => setCalendarRange(range)}
                                   className={`rounded border px-3 py-2 text-[10px] font-black transition ${
-                                    calendarRange === range && calendarView === "plan"
+                                    calendarRange === range
                                       ? "themed-active"
                                       : "border-white/10 text-zinc-400 hover:text-white"
                                   }`}
@@ -6087,10 +6122,12 @@
                               <div className="flex flex-wrap items-start justify-between gap-3 mb-4">
                                 <div>
                                   <p className="text-[10px] font-black text-zinc-500 uppercase tracking-widest mb-2">
-                                    Ore e paga giornaliere
+                                    Ore e paga {calendarRange === "year" ? "mensili" : "giornaliere"}
                                   </p>
                                   <p className="text-sm font-bold text-zinc-300">
-                                    Giorni liberi esclusi. Barre = ore lavorate, linea = paga stimata del giorno.
+                                    {calendarRange === "year"
+                                      ? "Ogni punto rappresenta un mese. Barre = ore pagate, linea = totale netto e buoni."
+                                      : "Giorni liberi esclusi. Barre = ore lavorate, linea = paga stimata del giorno."}
                                   </p>
                                 </div>
                                 <div className="flex flex-wrap gap-2 text-[9px] font-black uppercase tracking-widest">
@@ -6114,7 +6151,7 @@
                                 </div>
                                 <div className="flex flex-wrap gap-2 text-[9px] font-black uppercase tracking-widest">
                                   {[
-                                    { key: "daily", label: "Paga giornaliera" },
+                                    { key: "daily", label: calendarRange === "year" ? "Paga mensile" : "Paga giornaliera" },
                                     { key: "cumulative", label: "Paga cumulata" },
                                   ].map((option) => (
                                     <button
@@ -6131,21 +6168,21 @@
                                   ))}
                                 </div>
                               </div>
-                              {monthlyGraphData.points.length === 0 ? (
+                              {activeGraphData.points.length === 0 ? (
                                 <p className="py-8 text-center text-sm text-zinc-500">
-                                  Nessun turno salvato per questo mese.
+                                  Nessun turno salvato per {calendarRange === "year" ? "quest'anno" : "questo mese"}.
                                 </p>
                               ) : (
                                 <div className="space-y-4">
                                   <div className="overflow-x-auto">
                                     <svg
-                                      viewBox={`0 0 ${Math.max(720, monthlyGraphData.points.length * 44)} 280`}
+                                      viewBox={`0 0 ${Math.max(720, activeGraphData.points.length * 44)} 280`}
                                       className="w-full min-w-[720px]"
                                       role="img"
-                                      aria-label="Grafico ore e paga del mese"
+                                      aria-label={`Grafico ore e paga ${calendarRange === "year" ? "dell'anno" : "del mese"}`}
                                     >
                                       {(() => {
-                                        const width = Math.max(720, monthlyGraphData.points.length * 44);
+                                        const width = Math.max(720, activeGraphData.points.length * 44);
                                         const height = 280;
                                         const left = 40;
                                         const right = 28;
@@ -6153,16 +6190,16 @@
                                         const bottom = 42;
                                         const plotWidth = width - left - right;
                                         const plotHeight = height - top - bottom;
-                                        const step = monthlyGraphData.points.length > 1 ? plotWidth / (monthlyGraphData.points.length - 1) : 0;
-                                        const maxHours = Math.max(8, monthlyGraphData.maxHours);
+                                        const step = activeGraphData.points.length > 1 ? plotWidth / (activeGraphData.points.length - 1) : 0;
+                                        const maxHours = Math.max(8, activeGraphData.maxHours);
                                         const paySeriesMax =
                                           calendarPayLineMode === "cumulative"
-                                            ? Math.max(60, monthlyGraphData.maxCumulativePay)
-                                            : Math.max(60, monthlyGraphData.maxPay);
+                                            ? Math.max(60, activeGraphData.maxCumulativePay)
+                                            : Math.max(60, activeGraphData.maxPay);
                                         const showHours = calendarGraphMode === "both" || calendarGraphMode === "hours";
                                         const showPay = calendarGraphMode === "both" || calendarGraphMode === "pay";
                                         const payPath = showPay
-                                          ? monthlyGraphData.points
+                                          ? activeGraphData.points
                                           .map((point, index) => {
                                             const x = left + step * index;
                                             const payValue = calendarPayLineMode === "cumulative" ? point.cumulativePay : point.pay;
@@ -6199,7 +6236,7 @@
                                                 </g>
                                               );
                                             })}
-                                            {monthlyGraphData.points.map((point, index) => {
+                                            {activeGraphData.points.map((point, index) => {
                                               const x = left + step * index;
                                               const barWidth = Math.max(10, Math.min(22, step * 0.45 || 22));
                                               const barHeight = (point.hours / maxHours) * plotHeight;
@@ -6219,7 +6256,7 @@
                                                     className="cursor-pointer"
                                                     onMouseEnter={() => setHoveredGraphPointKey(point.key)}
                                                     onFocus={() => setHoveredGraphPointKey(point.key)}
-                                                      onClick={() => selectCalendarDay(point.key)}
+                                                      onClick={() => selectCalendarGraphPoint(point)}
                                                     />
                                                   )}
                                                   {showPay && (
@@ -6231,7 +6268,7 @@
                                                       className="cursor-pointer"
                                                       onMouseEnter={() => setHoveredGraphPointKey(point.key)}
                                                       onFocus={() => setHoveredGraphPointKey(point.key)}
-                                                      onClick={() => selectCalendarDay(point.key)}
+                                                      onClick={() => selectCalendarGraphPoint(point)}
                                                     />
                                                   )}
                                                   <rect
@@ -6243,7 +6280,7 @@
                                                     className="cursor-pointer"
                                                     onMouseEnter={() => setHoveredGraphPointKey(point.key)}
                                                     onFocus={() => setHoveredGraphPointKey(point.key)}
-                                                    onClick={() => selectCalendarDay(point.key)}
+                                                    onClick={() => selectCalendarGraphPoint(point)}
                                                   />
                                                   <text
                                                     x={x}
@@ -6253,7 +6290,7 @@
                                                     fontSize="10"
                                                     fontWeight="700"
                                                   >
-                                                    {String(point.dayNumber).padStart(2, "0")}
+                                                    {point.label || String(point.dayNumber).padStart(2, "0")}
                                                   </text>
                                                 </g>
                                               );
@@ -6275,11 +6312,18 @@
                                   </div>
                                   <div className="rounded border border-white/10 bg-white/[0.04] p-3 text-left">
                                     <p className="mb-2 text-[10px] font-black uppercase tracking-widest text-zinc-500">
-                                      Informazioni sul giorno
+                                      Informazioni sul {calendarRange === "year" ? "mese" : "giorno"}
                                     </p>
                                     {hoveredGraphPoint && (
                                       <>
-                                        <div className="text-sm font-black text-white">{hoveredGraphPoint.key}</div>
+                                        <div className="text-sm font-black text-white">
+                                          {hoveredGraphPoint.title || hoveredGraphPoint.key}
+                                        </div>
+                                        {calendarRange === "year" && (
+                                          <div className="mt-1 text-[10px] font-bold uppercase tracking-widest text-zinc-500">
+                                            {hoveredGraphPoint.shiftCount} {hoveredGraphPoint.shiftCount === 1 ? "turno" : "turni"}
+                                          </div>
+                                        )}
                                         {hoveredGraphPoint.windowStart && hoveredGraphPoint.windowEnd && (
                                           <>
                                             <div className="mt-2 text-[10px] font-black uppercase tracking-widest text-zinc-400">
@@ -6291,7 +6335,7 @@
                                           </>
                                         )}
                                         <div className="mt-2 text-[10px] font-black uppercase tracking-widest text-zinc-400">
-                                          Ore
+                                          {calendarRange === "year" ? "Ore pagate" : "Ore"}
                                         </div>
                                         <div className="text-lg font-black text-white">{hoveredGraphPoint.hours.toFixed(1)}h</div>
                                         {hoveredGraphPoint.nightHours > 0 && (
@@ -6305,7 +6349,11 @@
                                           </>
                                         )}
                                         <div className="mt-2 text-[10px] font-black uppercase tracking-widest text-zinc-400">
-                                          {calendarPayLineMode === "cumulative" ? "Paga cumulata" : "Paga"}
+                                          {calendarPayLineMode === "cumulative"
+                                            ? "Paga cumulata"
+                                            : calendarRange === "year"
+                                              ? "Paga mensile"
+                                              : "Paga"}
                                         </div>
                                         <div className="text-lg font-black themed-text">
                                           EUR {(calendarPayLineMode === "cumulative" ? hoveredGraphPoint.cumulativePay : hoveredGraphPoint.pay).toFixed(2)}
