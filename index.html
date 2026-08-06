@@ -2068,6 +2068,7 @@
           () => readLocalSettings().ccnlLevel || "9",
         );
         const [settingsStatus, setSettingsStatus] = useState("");
+        const [debugCopyStatus, setDebugCopyStatus] = useState("");
         const [icalSyncStatus, setIcalSyncStatus] = useState("");
         const [currentTime, setCurrentTime] = useState(new Date());
         const autoEndingRef = useRef(false);
@@ -4072,6 +4073,125 @@
             ),
           [yearlyMonthSummaries],
         );
+        const copyCalendarDebugToClipboard = async () => {
+          const idAliases = new Map();
+          const aliasId = (value) => {
+            if (!value) return null;
+            const key = String(value);
+            if (!idAliases.has(key)) {
+              idAliases.set(key, `id-${idAliases.size + 1}`);
+            }
+            return idAliases.get(key);
+          };
+          const roundDebug = (value) => Number((Number(value) || 0).toFixed(2));
+          const serializeShift = (shift) => ({
+            id: aliasId(shift.id),
+            originalId: aliasId(shift.originalId),
+            legacyId: aliasId(shift.legacyId),
+            kind: shift.kind || "work",
+            source: shift.source || "unknown",
+            date: shift.date || null,
+            startTime: shift.startTime || null,
+            endTime: shift.endTime || null,
+            note: shift.note || null,
+            seededTest: isSeededTestShift(shift),
+          });
+          const countBy = (items, getKey) =>
+            items.reduce((counts, item) => {
+              const key = getKey(item) || "unknown";
+              counts[key] = (counts[key] || 0) + 1;
+              return counts;
+            }, {});
+          const rawMergeInputs = [...importedCalendarShifts, ...calendarShifts];
+          const mergeGroups = rawMergeInputs.reduce((groups, shift) => {
+            const key = [shift.kind || "work", shift.date, shift.startTime, shift.endTime].join("|");
+            if (!groups.has(key)) groups.set(key, []);
+            groups.get(key).push(shift);
+            return groups;
+          }, new Map());
+          const duplicateMergeKeys = Array.from(mergeGroups, ([key, shifts]) => ({ key, shifts }))
+            .filter((entry) => entry.shifts.length > 1)
+            .map((entry) => ({
+              key: entry.key,
+              count: entry.shifts.length,
+              entries: entry.shifts.map(serializeShift),
+            }));
+          const monthValues = Array.from(
+            new Set(
+              rawMergeInputs
+                .concat(effectiveCalendarShifts)
+                .map((shift) => shift.date?.slice(0, 7))
+                .filter(Boolean),
+            ),
+          ).sort();
+          const monthDiagnostics = monthValues.map((monthValue) => {
+            const shifts = effectiveCalendarShifts.filter((shift) => shift.date.startsWith(monthValue));
+            const prediction = calculateMonthlyPrediction(monthValue, shifts);
+            return {
+              month: monthValue,
+              effectiveEntries: shifts.length,
+              paidHours: roundDebug(prediction.paidElapsed / 3600000),
+              elapsedHours: roundDebug(prediction.elapsed / 3600000),
+              nightHours: roundDebug(getTotalNightHours(prediction)),
+              foodVouchers: roundDebug(prediction.foodVouchers),
+              shiftEarnings: roundDebug(prediction.earningsTotal),
+              parkingDeduction: roundDebug(prediction.parkingDeduction),
+              payslipNetEstimate: roundDebug(prediction.payslipNetEstimate.net),
+              displayedTotal: roundDebug(prediction.total),
+              payCodeHours: Object.fromEntries(
+                Object.entries(prediction.payCodeTotals).map(([code, hours]) => [code, roundDebug(hours)]),
+              ),
+            };
+          });
+          const report = {
+            report: "PayPredictor calendar debug",
+            formatVersion: 1,
+            generatedAt: new Date().toISOString(),
+            environment: {
+              timezone: Intl.DateTimeFormat().resolvedOptions().timeZone || null,
+              timezoneOffsetMinutes: new Date().getTimezoneOffset(),
+              locale: navigator.language || null,
+              userAgent: navigator.userAgent,
+              viewport: `${window.innerWidth}x${window.innerHeight}`,
+            },
+            settings: {
+              ccnlLevel,
+              calculationCcnlLevel,
+              paysForParking,
+              paysUnionDues,
+              darkTheme,
+              hasIcalUrl: Boolean(googleCalendarIcsUrl.trim()),
+              icalSyncStatus: icalSyncStatus || null,
+              selectedCalendarMonth: calendarMonth,
+              voucherOverrides: monthlyVoucherOverrides,
+            },
+            counts: {
+              localAndPdf: calendarShifts.length,
+              importedIcal: importedCalendarShifts.length,
+              mergedBeforeAbsences: allCalendarShifts.length,
+              effective: effectiveCalendarShifts.length,
+              localBySource: countBy(calendarShifts, (shift) => shift.source),
+              effectiveBySource: countBy(effectiveCalendarShifts, (shift) => shift.source),
+              effectiveByMonth: countBy(effectiveCalendarShifts, (shift) => shift.date?.slice(0, 7)),
+            },
+            monthDiagnostics,
+            duplicateMergeKeys,
+            entries: {
+              localAndPdf: calendarShifts.map(serializeShift),
+              importedIcal: importedCalendarShifts.map(serializeShift),
+              mergedBeforeAbsences: allCalendarShifts.map(serializeShift),
+              effective: effectiveCalendarShifts.map(serializeShift),
+            },
+          };
+
+          try {
+            await navigator.clipboard.writeText(JSON.stringify(report, null, 2));
+            setDebugCopyStatus(`Debug copiato: ${effectiveCalendarShifts.length} voci effettive`);
+          } catch (error) {
+            console.error("Errore copia debug calendario", error);
+            setDebugCopyStatus("Impossibile copiare il debug");
+          }
+        };
         const monthlyOrdinaryWorkThreshold = monthlyPrediction.ordinaryWorkThreshold;
         const monthlyShiftBreakdowns = useMemo(() => {
           const weeklyHoursByKey = {};
@@ -5039,6 +5159,26 @@
                           {icalSyncStatus && (
                             <p className="text-[10px] font-bold uppercase tracking-widest text-zinc-500">{icalSyncStatus}</p>
                           )}
+                          <details className="border-t border-white/[0.07] pt-3 text-left">
+                            <summary className="cursor-pointer text-[9px] font-bold uppercase tracking-widest text-zinc-600">
+                              Diagnostica
+                            </summary>
+                            <div className="mt-3 flex flex-wrap items-center gap-3">
+                              <button
+                                type="button"
+                                onClick={copyCalendarDebugToClipboard}
+                                className="rounded border border-white/10 px-3 py-2 text-[9px] font-black uppercase tracking-widest text-zinc-400 hover:text-white"
+                              >
+                                Copia debug calendario
+                              </button>
+                              <span className="text-[9px] font-bold text-zinc-600">
+                                Credenziali e URL iCal esclusi
+                              </span>
+                            </div>
+                            {debugCopyStatus && (
+                              <p className="mt-2 text-[9px] font-bold text-zinc-400">{debugCopyStatus}</p>
+                            )}
+                          </details>
                         </div>
                       ) : mode === "track" ? (
                         <label className="block">
