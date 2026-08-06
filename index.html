@@ -1891,6 +1891,8 @@
           nightSundayHolidayExtra: 0,
           nightWeekdayHours: 0,
           nightSundayHolidayHours: 0,
+          clockNightWeekdayHours: 0,
+          clockNightSundayHolidayHours: 0,
           mealVoucher: 0,
           elapsed: 0,
           paidElapsed: 0,
@@ -1916,6 +1918,9 @@
           nightSundayHolidayExtra: left.nightSundayHolidayExtra + right.nightSundayHolidayExtra,
           nightWeekdayHours: left.nightWeekdayHours + right.nightWeekdayHours,
           nightSundayHolidayHours: left.nightSundayHolidayHours + right.nightSundayHolidayHours,
+          clockNightWeekdayHours: left.clockNightWeekdayHours + right.clockNightWeekdayHours,
+          clockNightSundayHolidayHours:
+            left.clockNightSundayHolidayHours + right.clockNightSundayHolidayHours,
           mealVoucher: left.mealVoucher + right.mealVoucher,
           elapsed: left.elapsed + right.elapsed,
           paidElapsed: left.paidElapsed + right.paidElapsed,
@@ -1950,8 +1955,16 @@
       const roundCurrency = (amount) => Math.round((amount + Number.EPSILON) * 100) / 100;
       const formatEuro = (amount) =>
         `EUR ${amount.toLocaleString("it-IT", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
-      const getTotalNightHours = (breakdownLike) =>
-        (breakdownLike.nightWeekdayHours || 0) + (breakdownLike.nightSundayHolidayHours || 0);
+      const getTotalNightHours = (breakdownLike) => {
+        const hasClockHours =
+          Number.isFinite(breakdownLike.clockNightWeekdayHours) ||
+          Number.isFinite(breakdownLike.clockNightSundayHolidayHours);
+        return hasClockHours
+          ? (breakdownLike.clockNightWeekdayHours || 0) +
+              (breakdownLike.clockNightSundayHolidayHours || 0)
+          : (breakdownLike.nightWeekdayHours || 0) +
+              (breakdownLike.nightSundayHolidayHours || 0);
+      };
       const APP_MODES = new Set(["calendar", "import", "track", "predict", "settings"]);
 
       function App() {
@@ -2694,6 +2707,8 @@
           let nightSundayHolidayExtra = 0;
           let nightWeekdayHours = 0;
           let nightSundayHolidayHours = 0;
+          let clockNightWeekdayHours = 0;
+          let clockNightSundayHolidayHours = 0;
           const payCodeTotals = {
             ORD: 0,
             S15: 0,
@@ -2722,6 +2737,16 @@
 
           while (curr < endMs) {
             const next = Math.min(curr + step, endMs);
+            const d = new Date(curr);
+            // Clock-time night totals stay independent from premium-eligible NTT/NTD hours.
+            if (isNightShift(d)) {
+              const clockHours = (next - curr) / 3600000;
+              if (isSundayOrHoliday(d)) {
+                clockNightSundayHolidayHours += clockHours;
+              } else {
+                clockNightWeekdayHours += clockHours;
+              }
+            }
             const breakOverlapMs =
               breakStartMs === null
                 ? 0
@@ -2733,7 +2758,6 @@
             }
 
             const hours = paidStepMs / 3600000;
-            const d = new Date(curr);
             const isAllocatedWeeklyOvertime =
               paidHoursSoFar + HOURS_EPSILON >= weeklyRegularHoursForShift;
             const payCode = isAllocatedWeeklyOvertime
@@ -2777,6 +2801,8 @@
             nightSundayHolidayExtra,
             nightWeekdayHours,
             nightSundayHolidayHours,
+            clockNightWeekdayHours,
+            clockNightSundayHolidayHours,
             mealVoucher,
             elapsed,
             paidElapsed,
@@ -3385,8 +3411,8 @@
               workEvents += 1;
               if (isSundayOrHoliday(date)) bonuses.holidays += 1;
               if (breakdown.mealVoucher > 0) bonuses.vouchers += 1;
-              bonuses.nightHours += breakdown.nightWeekdayHours;
-              bonuses.holidayNightHours += breakdown.nightSundayHolidayHours;
+              bonuses.nightHours += breakdown.clockNightWeekdayHours;
+              bonuses.holidayNightHours += breakdown.clockNightSundayHolidayHours;
             }
           });
 
@@ -3779,11 +3805,7 @@
                 const breakdown = calculateDailyShiftBreakdown(shift, shifts, 0, 0);
                 acc.total += breakdown.total + breakdown.mealVoucher;
                 acc.displayHours += breakdown.elapsed / 3600000;
-                acc.hasNightShift =
-                  acc.hasNightShift ||
-                  breakdown.nightWeekdayHours > 0 ||
-                  breakdown.nightSundayHolidayHours > 0 ||
-                  breakdown.payCodeTotals.S50 > 0;
+                acc.hasNightShift = acc.hasNightShift || getTotalNightHours(breakdown) > 0;
                 return acc;
               },
               { total: 0, displayHours: 0, hasNightShift: false },
@@ -3856,6 +3878,8 @@
           let nightSundayHolidayExtra = 0;
           let nightWeekdayHours = 0;
           let nightSundayHolidayHours = 0;
+          let clockNightWeekdayHours = 0;
+          let clockNightSundayHolidayHours = 0;
           let unpaidBreakMs = 0;
           let foodVouchers = 0;
           let leaveHours = 0;
@@ -3885,6 +3909,8 @@
             nightSundayHolidayExtra += breakdown.nightSundayHolidayExtra;
             nightWeekdayHours += breakdown.nightWeekdayHours;
             nightSundayHolidayHours += breakdown.nightSundayHolidayHours;
+            clockNightWeekdayHours += breakdown.clockNightWeekdayHours;
+            clockNightSundayHolidayHours += breakdown.clockNightSundayHolidayHours;
             unpaidBreakMs += breakdown.unpaidBreakMs;
             foodVouchers += breakdown.mealVoucher;
             leaveHours += breakdown.leaveHours;
@@ -3923,6 +3949,8 @@
             nightSundayHolidayExtra,
             nightWeekdayHours,
             nightSundayHolidayHours,
+            clockNightWeekdayHours,
+            clockNightSundayHolidayHours,
             unpaidBreakMs,
             leaveHours,
             sickHours,
@@ -3994,7 +4022,7 @@
               const windowStart = day.shifts[0]?.startTime || null;
               const windowEnd = day.shifts[day.shifts.length - 1]?.endTime || null;
               const nightHours = dayBreakdowns.reduce(
-                (sum, entry) => sum + entry.breakdown.nightWeekdayHours + entry.breakdown.nightSundayHolidayHours,
+                (sum, entry) => sum + getTotalNightHours(entry.breakdown),
                 0,
               );
               const mealVoucher = dayBreakdowns.reduce((sum, entry) => sum + entry.breakdown.mealVoucher, 0);
@@ -4191,7 +4219,7 @@
           const isLeave = isLeaveShift(shift);
           const isAbsence = isSick || isLeave;
           const isOvernight = !isAbsence && shift.endTime <= shift.startTime;
-          const nightHours = breakdown.nightWeekdayHours + breakdown.nightSundayHolidayHours;
+          const nightHours = getTotalNightHours(breakdown);
 
           return (
             <div
@@ -5268,8 +5296,36 @@
                         <div className="calendar-workspace space-y-4">
                           <section className="modern-month-hero" aria-label={`Riepilogo ${currentCalendarMonthLabel}`}>
                               <div className="modern-month-hero-copy">
-                                <p>Disponibile questo mese</p>
-                                <h2>{currentCalendarMonthLabel}</h2>
+                                <div className="flex items-start justify-between gap-3">
+                                  <div>
+                                    <p>Disponibile questo mese</p>
+                                    <h2>{currentCalendarMonthLabel}</h2>
+                                  </div>
+                                  <div
+                                    className="inline-flex shrink-0 items-center gap-0.5 rounded border border-white/[0.08] bg-black/15 p-0.5"
+                                    title="Confronto temporaneo"
+                                  >
+                                    <span className="px-1.5 text-[8px] font-black uppercase text-zinc-500">
+                                      Livello
+                                    </span>
+                                    {["9", "8"].map((level) => (
+                                      <button
+                                        key={level}
+                                        type="button"
+                                        aria-label={`Calcola riepilogo con ${level}° livello`}
+                                        aria-pressed={calculationCcnlLevel === level}
+                                        onClick={() => setCalculationCcnlLevel(level)}
+                                        className={`rounded px-2 py-1 text-[9px] font-black transition ${
+                                          calculationCcnlLevel === level
+                                            ? "bg-white/15 text-white"
+                                            : "text-zinc-500 hover:text-zinc-200"
+                                        }`}
+                                      >
+                                        {level}°
+                                      </button>
+                                    ))}
+                                  </div>
+                                </div>
                                 <div className="modern-month-total">
                                   EUR {monthlyPrediction.total.toLocaleString("it-IT", {
                                     minimumFractionDigits: 2,
@@ -5661,6 +5717,7 @@
                                     key={level}
                                     type="button"
                                     aria-label={`Calcola con ${level}° livello`}
+                                    aria-pressed={calculationCcnlLevel === level}
                                     onClick={() => setCalculationCcnlLevel(level)}
                                     className={`rounded px-2 py-1 text-[9px] font-black transition ${
                                       calculationCcnlLevel === level
@@ -6371,7 +6428,7 @@
                               const isLeave = isLeaveShift(shift);
                               const isAbsence = isSick || isLeave;
                               const isOvernight = !isAbsence && shift.endTime <= shift.startTime;
-                              const nightHours = breakdown.nightWeekdayHours + breakdown.nightSundayHolidayHours;
+                              const nightHours = getTotalNightHours(breakdown);
                               return (
                                 <div key={shift.id} className="rounded border border-white/10 bg-white/[0.035] p-3">
                                   <div className="flex items-start justify-between gap-3">
