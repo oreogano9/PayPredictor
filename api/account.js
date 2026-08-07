@@ -18,6 +18,40 @@ function getStatsSecret() {
   return process.env.PAYPREDICTOR_STATS_SECRET || "";
 }
 
+function escapeTelegramHtml(value) {
+  return String(value || "")
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;");
+}
+
+async function sendTelegramAccountCreated({ displayName, createdAt }) {
+  const botToken = String(process.env.TELEGRAM_BOT_TOKEN || "").trim();
+  const chatId = String(process.env.TELEGRAM_CHAT_ID || "").trim();
+  if (!botToken || !chatId) return { skipped: true };
+
+  const text = [
+    `<b>Data creazione:</b> ${escapeTelegramHtml(createdAt)}`,
+    `<b>Nome:</b> ${escapeTelegramHtml(displayName)}`,
+  ].join("\n");
+  const response = await fetch(`https://api.telegram.org/bot${botToken}/sendMessage`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      chat_id: chatId,
+      text,
+      parse_mode: "HTML",
+      disable_web_page_preview: true,
+    }),
+    signal: AbortSignal.timeout(5000),
+  });
+  const result = await response.json().catch(() => ({}));
+  if (!response.ok || result.ok === false) {
+    throw new Error(result.description || `Telegram returned HTTP ${response.status}`);
+  }
+  return { ok: true };
+}
+
 function normalizeName(name) {
   return String(name || "").normalize("NFKC").trim().replace(/\s+/g, " ").toLocaleLowerCase("it-IT");
 }
@@ -319,6 +353,11 @@ module.exports = async function handler(request, response) {
           createdAt: now,
           updatedAt: now,
         });
+        try {
+          await sendTelegramAccountCreated({ displayName, createdAt: now });
+        } catch (error) {
+          console.error("Telegram account notification failed", error);
+        }
 
         return response.status(201).json({
           name: displayName,

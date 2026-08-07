@@ -17,7 +17,8 @@ To enable account backups on Vercel:
 1. Create and connect a Blob store with **Private** access.
 2. Add `PAYPREDICTOR_AUTH_SECRET` as an environment variable with a random value of at least 32 characters.
 3. Add `PAYPREDICTOR_STATS_SECRET` with a different random value of at least 32 characters to enable the internal user count.
-4. Redeploy after connecting the store and adding the variables.
+4. Add `TELEGRAM_BOT_TOKEN` and `TELEGRAM_CHAT_ID` to receive a private two-line notification when an account is created.
+5. Redeploy after connecting the store and adding the variables.
 
 The normalized username locates the account, the four-digit PIN is stored only as a salted hash, and the browser remembers a signed login token. A four-digit PIN is convenience-level security and should not be reused anywhere else.
 
@@ -42,6 +43,8 @@ curl -sS https://YOUR-DOMAIN/api/account \
 ```
 
 `uniqueUsers` is the deduplicated account total. `activeRecords` and `legacyRecords` are diagnostics for migrations and should not be used as the user total.
+
+Account creation notifications use Telegram's `sendMessage` endpoint directly, matching the Qmatic watcher. They contain only the ISO creation date and account display name. Login and credential updates never send a notification, and Telegram failures never block account creation.
 
 The `Track` mode lets you choose the actual start time in 30-minute intervals before starting a shift. The `Predict` mode defaults to today and estimates a day from selected date, start time, and end time. If the end time is earlier than or equal to the start time, the prediction treats it as an overnight shift ending the next day.
 
