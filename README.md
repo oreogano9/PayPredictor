@@ -16,11 +16,31 @@ To enable account backups on Vercel:
 
 1. Create and connect a Blob store with **Private** access.
 2. Add `PAYPREDICTOR_AUTH_SECRET` as an environment variable with a random value of at least 32 characters.
-3. Redeploy after connecting the store and adding the variable.
+3. Add `PAYPREDICTOR_STATS_SECRET` with a different random value of at least 32 characters to enable the internal user count.
+4. Redeploy after connecting the store and adding the variables.
 
 The normalized username locates the account, the four-digit PIN is stored only as a salted hash, and the browser remembers a signed login token. A four-digit PIN is convenience-level security and should not be reused anywhere else.
 
 Signed-in users can change their username or replace their PIN from Settings. Credential changes preserve the existing backup, issue a new signed session, and invalidate sessions created with the previous credentials.
+
+Each account has a server-generated stable ID. Renaming an account or changing its PIN keeps that ID, so the internal count remains a count of unique users. Existing accounts receive an ID automatically the next time they log in, restore, save, or update their credentials.
+
+The aggregate count is available only with the stats secret and returns no usernames, PIN data, or calendar data:
+
+```sh
+npm run users:count
+```
+
+The command reads `PAYPREDICTOR_STATS_SECRET` from the environment. On the maintainer's Mac it can also read the secret from the `PayPredictor Stats API` Keychain item. The underlying endpoint can be queried directly when needed:
+
+```sh
+curl -sS https://YOUR-DOMAIN/api/account \
+  -H 'Content-Type: application/json' \
+  -H "Authorization: Bearer $PAYPREDICTOR_STATS_SECRET" \
+  --data '{"action":"stats"}'
+```
+
+`uniqueUsers` is the deduplicated account total. `activeRecords` and `legacyRecords` are diagnostics for migrations and should not be used as the user total.
 
 The `Track` mode lets you choose the actual start time in 30-minute intervals before starting a shift. The `Predict` mode defaults to today and estimates a day from selected date, start time, and end time. If the end time is earlier than or equal to the start time, the prediction treats it as an overnight shift ending the next day.
 

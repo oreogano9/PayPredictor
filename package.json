@@ -2,6 +2,9 @@
   "name": "paypredictor",
   "private": true,
   "version": "1.0.0",
+  "scripts": {
+    "users:count": "node scripts/count-users.mjs"
+  },
   "dependencies": {
     "@vercel/blob": "^2.3.0"
   }

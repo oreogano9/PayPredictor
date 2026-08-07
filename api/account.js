@@ -5,12 +5,17 @@ const SESSION_MAX_AGE_MS = 365 * 24 * 60 * 60 * 1000;
 const MAX_DATA_BYTES = 900_000;
 const LOGIN_WINDOW_MS = 15 * 60 * 1000;
 const MAX_LOGIN_ATTEMPTS = 10;
+const ACCOUNT_ID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 
 const loginAttempts = globalThis.__payPredictorLoginAttempts || new Map();
 globalThis.__payPredictorLoginAttempts = loginAttempts;
 
 function getSecret() {
   return process.env.PAYPREDICTOR_AUTH_SECRET || "";
+}
+
+function getStatsSecret() {
+  return process.env.PAYPREDICTOR_STATS_SECRET || "";
 }
 
 function normalizeName(name) {
@@ -92,6 +97,21 @@ function recordAuthVersion(record) {
   return Number.isInteger(record?.authVersion) && record.authVersion > 0 ? record.authVersion : 1;
 }
 
+function hasAccountId(record) {
+  return ACCOUNT_ID_PATTERN.test(String(record?.accountId || ""));
+}
+
+async function ensureAccountId(blobSdk, pathname, record) {
+  if (hasAccountId(record)) return record;
+  const identifiedRecord = {
+    ...record,
+    schemaVersion: 2,
+    accountId: crypto.randomUUID(),
+  };
+  await writeRecord(blobSdk, pathname, identifiedRecord);
+  return identifiedRecord;
+}
+
 function sessionMatchesRecord(session, record) {
   return (Number.isInteger(session?.authVersion) ? session.authVersion : 1) === recordAuthVersion(record);
 }
@@ -133,6 +153,37 @@ function recordFailedLogin(key) {
   loginAttempts.set(key, attempts);
 }
 
+function safeSecretMatch(provided, expected) {
+  const providedDigest = crypto.createHash("sha256").update(String(provided || "")).digest();
+  const expectedDigest = crypto.createHash("sha256").update(String(expected || "")).digest();
+  return crypto.timingSafeEqual(providedDigest, expectedDigest);
+}
+
+function statsAuthorization(request) {
+  const authorization = String(request.headers.authorization || "");
+  if (authorization.startsWith("Bearer ")) return authorization.slice(7).trim();
+  return String(request.headers["x-paypredictor-stats-secret"] || "").trim();
+}
+
+function isActiveAccountRecord(record) {
+  return Boolean(
+    record &&
+      typeof record === "object" &&
+      record.displayName &&
+      record.pinSalt &&
+      record.pinHash &&
+      record.data &&
+      typeof record.data === "object" &&
+      !Array.isArray(record.data),
+  );
+}
+
+function uniqueAccountIdentity(record, pathname) {
+  if (hasAccountId(record)) return `account:${record.accountId}`;
+  if (record.createdAt) return `legacy-created:${record.createdAt}`;
+  return `legacy-path:${pathname}`;
+}
+
 async function readRecord(blobSdk, pathname) {
   try {
     const result = await blobSdk.get(pathname, { access: "private", useCache: false });
@@ -152,6 +203,47 @@ async function writeRecord(blobSdk, pathname, record) {
     contentType: "application/json",
     cacheControlMaxAge: 60,
   });
+}
+
+async function countUniqueAccounts(blobSdk) {
+  const identities = new Set();
+  let activeRecords = 0;
+  let legacyRecords = 0;
+  let cursor;
+
+  do {
+    const page = await blobSdk.list({
+      prefix: `${ACCOUNT_PREFIX}/`,
+      limit: 1000,
+      ...(cursor ? { cursor } : {}),
+    });
+
+    for (let index = 0; index < page.blobs.length; index += 25) {
+      const batch = page.blobs.slice(index, index + 25);
+      const records = await Promise.all(
+        batch.map(async (blob) => ({
+          pathname: blob.pathname,
+          record: await readRecord(blobSdk, blob.pathname),
+        })),
+      );
+
+      records.forEach(({ pathname, record }) => {
+        if (!isActiveAccountRecord(record)) return;
+        activeRecords += 1;
+        if (!hasAccountId(record)) legacyRecords += 1;
+        identities.add(uniqueAccountIdentity(record, pathname));
+      });
+    }
+
+    cursor = page.hasMore ? page.cursor : undefined;
+  } while (cursor);
+
+  return {
+    uniqueUsers: identities.size,
+    activeRecords,
+    legacyRecords,
+    generatedAt: new Date().toISOString(),
+  };
 }
 
 module.exports = async function handler(request, response) {
@@ -179,6 +271,17 @@ module.exports = async function handler(request, response) {
   const blobSdk = await import("@vercel/blob");
 
   try {
+    if (action === "stats") {
+      const statsSecret = getStatsSecret();
+      if (!statsSecret || statsSecret.length < 32) {
+        return response.status(503).json({ error: "Conteggio utenti non configurato" });
+      }
+      if (!safeSecretMatch(statsAuthorization(request), statsSecret)) {
+        return response.status(401).json({ error: "Accesso non autorizzato" });
+      }
+      return response.status(200).json(await countUniqueAccounts(blobSdk));
+    }
+
     if (action === "create" || action === "login") {
       const validation = validateCredentials(body.name, body.pin);
       if (validation.error) return response.status(400).json({ error: validation.error });
@@ -198,7 +301,8 @@ module.exports = async function handler(request, response) {
         const pinSalt = crypto.randomBytes(16).toString("base64url");
         const now = new Date().toISOString();
         await writeRecord(blobSdk, pathname, {
-          schemaVersion: 1,
+          schemaVersion: 2,
+          accountId: crypto.randomUUID(),
           displayName,
           authVersion: 1,
           pinSalt,
@@ -224,10 +328,16 @@ module.exports = async function handler(request, response) {
         return response.status(401).json({ error: "Nome o PIN non corretti" });
       }
       loginAttempts.delete(attemptKey);
+      const identifiedRecord = await ensureAccountId(blobSdk, pathname, record);
       return response.status(200).json({
-        name: record.displayName,
-        token: signSession(accountKey, record.displayName, secret, recordAuthVersion(record)),
-        data: record.data,
+        name: identifiedRecord.displayName,
+        token: signSession(
+          accountKey,
+          identifiedRecord.displayName,
+          secret,
+          recordAuthVersion(identifiedRecord),
+        ),
+        data: identifiedRecord.data,
       });
     }
 
@@ -236,10 +346,11 @@ module.exports = async function handler(request, response) {
       if (!session) return response.status(401).json({ error: "Accesso scaduto" });
 
       const currentPathname = accountPath(session.accountKey);
-      const record = await readRecord(blobSdk, currentPathname);
+      let record = await readRecord(blobSdk, currentPathname);
       if (!record || !sessionMatchesRecord(session, record)) {
         return response.status(401).json({ error: "Accesso scaduto" });
       }
+      record = await ensureAccountId(blobSdk, currentPathname, record);
 
       const nameValidation = validateName(body.name);
       if (nameValidation.error) return response.status(400).json({ error: nameValidation.error });
@@ -277,7 +388,8 @@ module.exports = async function handler(request, response) {
         await writeRecord(blobSdk, nextPathname, updatedRecord);
         try {
           await writeRecord(blobSdk, currentPathname, {
-            schemaVersion: 1,
+            schemaVersion: 2,
+            accountId: record.accountId,
             authVersion,
             movedAt: new Date().toISOString(),
           });
@@ -303,10 +415,11 @@ module.exports = async function handler(request, response) {
       if (!session) return response.status(401).json({ error: "Accesso scaduto" });
 
       const pathname = accountPath(session.accountKey);
-      const record = await readRecord(blobSdk, pathname);
+      let record = await readRecord(blobSdk, pathname);
       if (!record || !sessionMatchesRecord(session, record)) {
         return response.status(401).json({ error: "Accesso scaduto" });
       }
+      record = await ensureAccountId(blobSdk, pathname, record);
 
       if (action === "restore") {
         return response.status(200).json({ name: record.displayName, data: record.data });
