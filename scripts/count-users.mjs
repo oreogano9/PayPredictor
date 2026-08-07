@@ -1,6 +1,7 @@
 import { execFileSync } from "node:child_process";
 
 const endpoint = process.env.PAYPREDICTOR_STATS_URL || "https://pay-predictor-olive.vercel.app/api/account";
+const includeNames = process.argv.includes("--names");
 
 function readStatsSecret() {
   if (process.env.PAYPREDICTOR_STATS_SECRET) return process.env.PAYPREDICTOR_STATS_SECRET;
@@ -29,7 +30,7 @@ const response = await fetch(endpoint, {
     Authorization: `Bearer ${secret}`,
     "Content-Type": "application/json",
   },
-  body: JSON.stringify({ action: "stats" }),
+  body: JSON.stringify({ action: includeNames ? "users" : "stats" }),
 });
 const result = await response.json().catch(() => ({}));
 
@@ -42,3 +43,7 @@ console.log(`Utenti unici: ${result.uniqueUsers}`);
 console.log(`Record attivi: ${result.activeRecords}`);
 console.log(`Record precedenti alla migrazione: ${result.legacyRecords}`);
 console.log(`Aggiornato: ${result.generatedAt}`);
+if (includeNames) {
+  console.log("Nomi:");
+  result.names.forEach((name) => console.log(`- ${name}`));
+}

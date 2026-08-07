@@ -3,7 +3,8 @@
   "private": true,
   "version": "1.0.0",
   "scripts": {
-    "users:count": "node scripts/count-users.mjs"
+    "users:count": "node scripts/count-users.mjs",
+    "users:list": "node scripts/count-users.mjs --names"
   },
   "dependencies": {
     "@vercel/blob": "^2.3.0"

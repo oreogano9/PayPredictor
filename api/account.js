@@ -205,8 +205,8 @@ async function writeRecord(blobSdk, pathname, record) {
   });
 }
 
-async function countUniqueAccounts(blobSdk) {
-  const identities = new Set();
+async function getAccountStats(blobSdk, includeNames = false) {
+  const accounts = new Map();
   let activeRecords = 0;
   let legacyRecords = 0;
   let cursor;
@@ -231,7 +231,12 @@ async function countUniqueAccounts(blobSdk) {
         if (!isActiveAccountRecord(record)) return;
         activeRecords += 1;
         if (!hasAccountId(record)) legacyRecords += 1;
-        identities.add(uniqueAccountIdentity(record, pathname));
+        const identity = uniqueAccountIdentity(record, pathname);
+        const updatedAt = String(record.updatedAt || record.createdAt || "");
+        const existing = accounts.get(identity);
+        if (!existing || existing.updatedAt <= updatedAt) {
+          accounts.set(identity, { name: String(record.displayName), updatedAt });
+        }
       });
     }
 
@@ -239,10 +244,13 @@ async function countUniqueAccounts(blobSdk) {
   } while (cursor);
 
   return {
-    uniqueUsers: identities.size,
+    uniqueUsers: accounts.size,
     activeRecords,
     legacyRecords,
     generatedAt: new Date().toISOString(),
+    ...(includeNames
+      ? { names: [...accounts.values()].map(({ name }) => name).sort((a, b) => a.localeCompare(b, "it-IT")) }
+      : {}),
   };
 }
 
@@ -271,7 +279,7 @@ module.exports = async function handler(request, response) {
   const blobSdk = await import("@vercel/blob");
 
   try {
-    if (action === "stats") {
+    if (action === "stats" || action === "users") {
       const statsSecret = getStatsSecret();
       if (!statsSecret || statsSecret.length < 32) {
         return response.status(503).json({ error: "Conteggio utenti non configurato" });
@@ -279,7 +287,7 @@ module.exports = async function handler(request, response) {
       if (!safeSecretMatch(statsAuthorization(request), statsSecret)) {
         return response.status(401).json({ error: "Accesso non autorizzato" });
       }
-      return response.status(200).json(await countUniqueAccounts(blobSdk));
+      return response.status(200).json(await getAccountStats(blobSdk, action === "users"));
     }
 
     if (action === "create" || action === "login") {

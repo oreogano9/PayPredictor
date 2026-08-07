@@ -29,9 +29,10 @@ The aggregate count is available only with the stats secret and returns no usern
 
 ```sh
 npm run users:count
+npm run users:list
 ```
 
-The command reads `PAYPREDICTOR_STATS_SECRET` from the environment. On the maintainer's Mac it can also read the secret from the `PayPredictor Stats API` Keychain item. The underlying endpoint can be queried directly when needed:
+The first command returns aggregate diagnostics. The second also returns the account display names, without calendar data or PIN information. Both commands read `PAYPREDICTOR_STATS_SECRET` from the environment. On the maintainer's Mac they can also read the secret from the `PayPredictor Stats API` Keychain item. The underlying endpoint can be queried directly when needed:
 
 ```sh
 curl -sS https://YOUR-DOMAIN/api/account \
